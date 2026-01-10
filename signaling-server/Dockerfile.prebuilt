@@ -9,10 +9,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the prebuilt binary from GitHub Actions
-COPY target/release/signaling-server /app/signaling-server
+COPY signaling-server/target/release/signaling-server /app/signaling-server
 
 # Copy entrypoint script
-COPY entrypoint.sh /app/entrypoint.sh
+COPY signaling-server/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Expose WebSocket port
