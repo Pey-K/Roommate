@@ -49,8 +49,13 @@ jobs:
 
       - name: Verify binary exists
         run: |
+          echo "Checking for binary and entrypoint..."
           ls -la signaling-server/target/release/
           test -f signaling-server/target/release/signaling-server
+          test -f signaling-server/entrypoint.sh
+          echo "All required files present!"
+          echo "Binary size:"
+          du -h signaling-server/target/release/signaling-server
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
