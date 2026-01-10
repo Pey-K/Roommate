@@ -135,13 +135,14 @@ The built app will be in `src-tauri/target/release/bundle/`.
 
 See **[GITHUB_SETUP.md](GITHUB_SETUP.md)** for setting up automatic Docker builds.
 
-One-command deploy:
+**Using Dockge/Portainer (Recommended):**
+- See **[deploy/DOCKGE_SETUP.md](deploy/DOCKGE_SETUP.md)**
+- Just copy-paste the docker-compose.yml into your Docker GUI!
+
+**Using Command Line:**
 ```bash
-# SSH to your NAS/server and run:
 curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
 ```
-
-This automatically creates directories, downloads config, and starts the server!
 
 ## Roadmap
 

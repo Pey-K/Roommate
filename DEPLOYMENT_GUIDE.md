@@ -4,14 +4,54 @@ Super simple guide for deploying the Roommate signaling server to your NAS or se
 
 ## For Users: Installing the Signaling Server
 
-### Step 1: SSH to Your NAS
+### 🖱️ Method 1: Using Dockge/Portainer (Easiest!)
+
+**If you have Dockge, Portainer, or any Docker GUI:**
+
+1. Open your Docker manager in a browser
+2. Create a new stack/compose named `roommate-signaling`
+3. Copy-paste this configuration:
+
+```yaml
+version: '3.8'
+
+services:
+  signaling-server:
+    image: ghcr.io/pey-k/roommate-signaling:latest
+    container_name: roommate-signaling
+    hostname: roommate-signaling
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - RUST_LOG=info
+    volumes:
+      - /mnt/App/apps/signal:/config
+    ports:
+      - "9001:9001"
+    restart: unless-stopped
+
+networks: {}
+```
+
+4. Click "Deploy" or "Start"
+
+**That's it!** Check the container logs to verify it's running.
+
+---
+
+### 💻 Method 2: Command Line Installation
+
+**If you prefer SSH:**
+
+#### Step 1: SSH to Your NAS
 
 Connect to your NAS via SSH:
 ```bash
 ssh your-username@your-nas-ip
 ```
 
-### Step 2: Run the One-Line Installer
+#### Step 2: Run the One-Line Installer
 
 Copy and paste this command:
 

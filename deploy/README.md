@@ -2,7 +2,25 @@
 
 This directory contains the deployment configuration for running the Roommate signaling server on your NAS or server.
 
-## 🚀 One-Command Installation (Easiest)
+## 🎯 Choose Your Installation Method
+
+### 🖱️ **Recommended: Use Dockge/Portainer** (GUI - Easiest!)
+
+If you use Dockge, Portainer, or any Docker GUI manager, this is the easiest method.
+
+**See [DOCKGE_SETUP.md](DOCKGE_SETUP.md) for detailed instructions.**
+
+**Quick version:**
+1. Open your Docker manager (Dockge/Portainer/etc.)
+2. Create new stack named `roommate-signaling`
+3. Copy-paste the docker-compose.yml (see DOCKGE_SETUP.md)
+4. Deploy!
+
+---
+
+## 💻 Command Line Installation
+
+### 🚀 One-Command Installation
 
 SSH into your NAS/server and run:
 
