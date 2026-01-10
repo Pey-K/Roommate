@@ -94,24 +94,23 @@ git push
 
 ## Step 8: Deploy to Your NAS
 
-Now you can deploy to your NAS:
+Now you can deploy to your NAS with a single command:
 
 ```bash
-# On your NAS
-mkdir -p /mnt/App/stacks/roommate-signaling
+# SSH to your NAS and run:
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
+```
+
+This one-liner will:
+- Create `/mnt/App/stacks/roommate-signaling` directory
+- Download docker-compose.yml
+- Pull the Docker image from GitHub Container Registry
+- Start the server
+- Docker will automatically create `/mnt/App/apps/signal` with proper permissions
+
+**Check logs:**
+```bash
 cd /mnt/App/stacks/roommate-signaling
-
-# Download the docker-compose file
-wget https://raw.githubusercontent.com/YOUR_USERNAME/roommate/main/deploy/docker-compose.yml
-
-# Or use curl
-curl -o docker-compose.yml https://raw.githubusercontent.com/YOUR_USERNAME/roommate/main/deploy/docker-compose.yml
-
-# Pull and start
-docker-compose pull
-docker-compose up -d
-
-# Check logs
 docker-compose logs -f signaling-server
 ```
 

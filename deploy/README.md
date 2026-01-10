@@ -2,52 +2,57 @@
 
 This directory contains the deployment configuration for running the Roommate signaling server on your NAS or server.
 
-## Quick Deploy to Your NAS
+## 🚀 One-Command Installation (Easiest)
 
-### Step 1: Copy to Your NAS
-
-Copy the `docker-compose.yml` file to your NAS:
+SSH into your NAS/server and run:
 
 ```bash
-# On your NAS
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
+```
+
+That's it! The script will:
+- Create the installation directory at `/mnt/App/stacks/roommate-signaling`
+- Download the configuration
+- Pull the Docker image
+- Start the server
+- Create the data directory at `/mnt/App/apps/signal` (automatically)
+
+**Custom installation directory:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | INSTALL_DIR=/your/custom/path bash
+```
+
+### Verify It's Running
+
+```bash
+cd /mnt/App/stacks/roommate-signaling
+docker-compose logs -f signaling-server
+```
+
+You should see: `Signaling server listening on ws://127.0.0.1:9001`
+
+---
+
+## 📝 Manual Installation (Alternative)
+
+If you prefer manual installation:
+
+### Step 1: Download and Start
+
+```bash
 mkdir -p /mnt/App/stacks/roommate-signaling
 cd /mnt/App/stacks/roommate-signaling
-
-# Copy the docker-compose.yml file here
+wget https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/docker-compose.yml
+docker-compose pull
+docker-compose up -d
 ```
 
-Or use this one-liner to download directly:
-
-```bash
-# Download from GitHub (after you push)
-wget https://raw.githubusercontent.com/YOUR_USERNAME/roommate/main/deploy/docker-compose.yml
-```
-
-### Step 2: Update the Image Name
-
-Edit `docker-compose.yml` and replace `YOUR_GITHUB_USERNAME` with your actual GitHub username:
-
-```yaml
-image: ghcr.io/YOUR_GITHUB_USERNAME/roommate-signaling:latest
-```
-
-For example: `ghcr.io/johndoe/roommate-signaling:latest`
-
-### Step 3: Start the Server
-
-```bash
-docker-compose pull  # Pull the latest image
-docker-compose up -d # Start in background
-```
-
-### Step 4: Verify It's Running
+### Step 2: Verify
 
 ```bash
 docker-compose ps
 docker-compose logs -f signaling-server
 ```
-
-You should see: `Signaling server listening on ws://127.0.0.1:9001`
 
 ## Configuration
 

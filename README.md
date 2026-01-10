@@ -135,15 +135,13 @@ The built app will be in `src-tauri/target/release/bundle/`.
 
 See **[GITHUB_SETUP.md](GITHUB_SETUP.md)** for setting up automatic Docker builds.
 
-Quick deploy:
+One-command deploy:
 ```bash
-# On your server
-mkdir -p /mnt/App/stacks/roommate-signaling
-cd /mnt/App/stacks/roommate-signaling
-wget https://raw.githubusercontent.com/YOUR_USERNAME/roommate/main/deploy/docker-compose.yml
-docker-compose pull
-docker-compose up -d
+# SSH to your NAS/server and run:
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
 ```
+
+This automatically creates directories, downloads config, and starts the server!
 
 ## Roadmap
 
