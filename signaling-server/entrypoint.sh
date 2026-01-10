@@ -22,4 +22,4 @@ mkdir -p /config
 chown -R "$PUID":"$PGID" /config
 
 # Switch to the roommate user and run the signaling server
-exec su-exec roommate:roommate /app/signaling-server
+exec gosu roommate /app/signaling-server
