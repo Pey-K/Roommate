@@ -22,6 +22,7 @@ pub enum SignalingStatus {
 /// Check if signaling server is available at the given URL
 pub async fn check_signaling_health(url: &str) -> Result<bool, SignalingError> {
     let timeout = Duration::from_secs(5);
+    let url = url.trim();
 
     // Parse the URL to validate it
     if !url.starts_with("ws://") && !url.starts_with("wss://") {
@@ -30,17 +31,16 @@ pub async fn check_signaling_health(url: &str) -> Result<bool, SignalingError> {
         ));
     }
 
-    // Convert ws:// to http:// and wss:// to https:// for health check
+    // Try HTTP health check (works for both local and tunneled connections)
+    // Convert ws:// to http:// and wss:// to https://
     let http_url = if url.starts_with("wss://") {
         url.replace("wss://", "https://")
     } else {
         url.replace("ws://", "http://")
     };
 
-    // Add /health endpoint
     let health_url = format!("{}/health", http_url.trim_end_matches('/'));
 
-    // Try HTTP health check first (works through proxies/tunnels)
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
@@ -64,5 +64,6 @@ pub async fn check_signaling_health(url: &str) -> Result<bool, SignalingError> {
 
 /// Get the default signaling server URL
 pub fn get_default_signaling_url() -> String {
-    "ws://127.0.0.1:9001".to_string()
+    // Default public signaling server for end users (Discord-like out-of-box behavior)
+    "wss://signal.pkcollection.net".to_string()
 }

@@ -1,19 +1,16 @@
 import { useState } from 'react'
 import { Download, Loader2, LogOut } from 'lucide-react'
 import { Button } from '../../components/ui/button'
-import { useIdentity } from '../../contexts/IdentityContext'
-import { useNavigate } from 'react-router-dom'
+import { useAccount } from '../../contexts/AccountContext'
 import { exportIdentity } from '../../lib/tauri'
 
 export function InfoExportSettings() {
-  const { logout } = useIdentity()
-  const navigate = useNavigate()
+  const { logout } = useAccount()
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
   function handleLogout() {
     logout()
-    navigate('/identity/setup')
   }
 
   async function handleExport() {
@@ -95,10 +92,10 @@ export function InfoExportSettings() {
           onClick={handleLogout}
         >
           <LogOut className="mr-2 h-4 w-4" />
-          Clear Identity
+          Logout
         </Button>
         <p className="text-xs text-muted-foreground font-light">
-          This clears your identity from memory. Your keys.dat file remains on disk and will be reloaded on next launch.
+          Clears your session and identity from memory. You will need to select your account to log back in.
         </p>
       </div>
     </div>

@@ -15,17 +15,6 @@ export function SignalingStatus() {
     }
   }
 
-  const getStatusText = () => {
-    switch (status) {
-      case 'connected':
-        return 'Signaling server connected'
-      case 'disconnected':
-        return 'Signaling server offline - Room creation disabled'
-      case 'checking':
-        return 'Checking signaling server...'
-    }
-  }
-
   const getTooltipText = () => {
     switch (status) {
       case 'connected':

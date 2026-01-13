@@ -55,6 +55,16 @@ impl AudioSettingsManager {
     }
 
     fn get_data_dir() -> Result<PathBuf, AudioSettingsError> {
+        // Check for custom data directory (for testing with multiple instances)
+        if let Ok(custom_dir) = std::env::var("ROOMMATE_DATA_DIR") {
+            let path = PathBuf::from(custom_dir);
+            if !path.exists() {
+                fs::create_dir_all(&path)
+                    .map_err(|e| AudioSettingsError::Io(e))?;
+            }
+            return Ok(path);
+        }
+
         #[cfg(target_os = "windows")]
         {
             let app_data = std::env::var("APPDATA")
@@ -64,7 +74,7 @@ impl AudioSettingsManager {
                 )))?;
             Ok(PathBuf::from(app_data).join("Roommate"))
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let home = std::env::var("HOME")
@@ -74,7 +84,7 @@ impl AudioSettingsManager {
                 )))?;
             Ok(PathBuf::from(home).join("Library").join("Application Support").join("Roommate"))
         }
-        
+
         #[cfg(target_os = "linux")]
         {
             let home = std::env::var("HOME")
@@ -84,7 +94,7 @@ impl AudioSettingsManager {
                 )))?;
             Ok(PathBuf::from(home).join(".config").join("roommate"))
         }
-        
+
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             Err(AudioSettingsError::Io(std::io::Error::new(

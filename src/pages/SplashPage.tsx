@@ -1,26 +1,31 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIdentity } from '../contexts/IdentityContext'
+import { useAccount } from '../contexts/AccountContext'
 
 function SplashPage() {
-  const { isLoading, hasStoredIdentity, identity } = useIdentity()
+  const { identity } = useIdentity()
+  const { isLoading: accountsLoading, accounts, currentAccountId } = useAccount()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (!isLoading) {
-      if (identity) {
-        // Identity loaded successfully, go to houses
-        navigate('/houses')
-      } else if (hasStoredIdentity) {
-        // Identity file exists but failed to load (corrupted)
-        // Still go to setup, user can restore
-        navigate('/identity/setup')
-      } else {
-        // No identity, go to setup
-        navigate('/identity/setup')
-      }
+    // Wait for AccountContext to load
+    if (accountsLoading) {
+      return
     }
-  }, [isLoading, hasStoredIdentity, identity, navigate])
+
+    // Session state is the ONLY authority for login
+    if (currentAccountId && identity) {
+      // Active session with identity loaded - go to main app
+      navigate('/houses')
+    } else if (accounts.length > 0) {
+      // Accounts exist but no active session - show account selector (login screen)
+      navigate('/account/select')
+    } else {
+      // No accounts exist - show setup to create first account
+      navigate('/identity/setup')
+    }
+  }, [accountsLoading, currentAccountId, identity, accounts, navigate])
 
   return (
     <div className="h-full bg-background grid-pattern flex items-center justify-center">
@@ -33,7 +38,7 @@ function SplashPage() {
           </div>
         </div>
         <p className="text-muted-foreground text-sm font-light tracking-wide uppercase">
-          {isLoading ? 'Initializing' : 'Preparing'}
+          {accountsLoading ? 'Initializing' : 'Preparing'}
         </p>
       </div>
     </div>

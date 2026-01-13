@@ -4,14 +4,17 @@ import { ArrowLeft, Settings, Volume2, Copy, Check, Mic, MicOff, PhoneOff, Plus 
 import { Button } from '../components/ui/button'
 import { loadHouse, addRoom, type House, type Room } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
-import { useSignaling } from '../contexts/SignalingContext'
+import { useWebRTC } from '../contexts/WebRTCContext'
 import { SignalingStatus } from '../components/SignalingStatus'
+import { useSignaling } from '../contexts/SignalingContext'
+import { registerHouseHint } from '../lib/tauri'
 
 function HouseViewPage() {
   const { houseId } = useParams<{ houseId: string }>()
   const navigate = useNavigate()
   const { identity } = useIdentity()
-  const { status: signalingStatus } = useSignaling()
+  const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers } = useWebRTC()
+  const { signalingUrl, status: signalingStatus } = useSignaling()
   const [house, setHouse] = useState<House | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [copiedInvite, setCopiedInvite] = useState(false)
@@ -30,6 +33,15 @@ function HouseViewPage() {
     }
 
     loadHouseData()
+
+    // Reload house data when window gains focus (e.g., alt-tabbing between instances)
+    const handleFocus = () => {
+      console.log('[HouseView] Window focused - reloading house data')
+      loadHouseData()
+    }
+
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
   }, [houseId])
 
   const loadHouseData = async () => {
@@ -46,9 +58,21 @@ function HouseViewPage() {
     }
   }
 
+  const getInviteUriForCurrentServer = (): string | null => {
+    if (!house) return null
+    if (!signalingUrl) return house.invite_uri
+
+    // Include the full signaling URL (wss://...) to avoid ambiguity and redirects.
+    return `rmmt://${house.signing_pubkey}@${signalingUrl.trim()}`
+  }
+
   const copyInviteCode = () => {
     if (!house) return
-    navigator.clipboard.writeText(house.invite_code)
+    // Copy an invite URI that points at the user's currently configured signaling server.
+    // (The backend currently defaults invite_uri to "signal.roommate.app", which may not resolve.)
+    const invite = getInviteUriForCurrentServer()
+    if (!invite) return
+    navigator.clipboard.writeText(invite)
     setCopiedInvite(true)
     setTimeout(() => setCopiedInvite(false), 2000)
   }
@@ -61,26 +85,32 @@ function HouseViewPage() {
     console.log('Opened room:', room.name)
   }
 
-  const handleJoinVoice = () => {
-    if (!currentRoom) return
-    setIsInVoice(true)
-    setIsMuted(false)
-    // TODO: Initialize WebRTC connection
-    console.log('Joining voice in room:', currentRoom.name)
+  const handleJoinVoice = async () => {
+    if (!currentRoom || !house || !identity) return
+
+    try {
+      await joinVoice(currentRoom.id, house.id, identity.user_id)
+      setIsInVoice(true)
+      setIsMuted(false)
+      console.log('Joined voice in room:', currentRoom.name)
+    } catch (error) {
+      console.error('Failed to join voice:', error)
+    }
   }
 
   const handleLeaveVoice = () => {
     if (!currentRoom) return
-    // TODO: Close WebRTC connection
-    console.log('Leaving voice in room:', currentRoom.name)
+
+    leaveVoice()
     setIsInVoice(false)
     setIsMuted(false)
+    console.log('Left voice in room:', currentRoom.name)
   }
 
   const toggleMute = () => {
-    setIsMuted(!isMuted)
-    // TODO: Mute/unmute audio stream
-    console.log('Mute toggled:', !isMuted)
+    webrtcToggleMute()
+    setIsMuted(isLocalMuted)
+    console.log('Mute toggled:', isLocalMuted)
   }
 
   const handleCreateRoom = async () => {
@@ -94,6 +124,17 @@ function HouseViewPage() {
         roomDescription.trim() || null
       )
       setHouse(updatedHouse)
+
+      // Publish updated hint (rooms changed)
+      if (signalingStatus === 'connected' && signalingUrl) {
+        registerHouseHint(signalingUrl, {
+          signing_pubkey: updatedHouse.signing_pubkey,
+          encrypted_state: JSON.stringify(updatedHouse),
+          signature: '',
+          last_updated: new Date().toISOString(),
+        }).catch(e => console.warn('Failed to publish house hint:', e))
+      }
+
       setShowCreateRoomDialog(false)
       setRoomName('')
       setRoomDescription('')
@@ -156,17 +197,8 @@ function HouseViewPage() {
                 </h2>
                 <button
                   onClick={() => setShowCreateRoomDialog(true)}
-                  disabled={signalingStatus !== 'connected'}
-                  className={`p-1 rounded transition-colors ${
-                    signalingStatus === 'connected'
-                      ? 'hover:bg-accent/50 text-muted-foreground hover:text-foreground'
-                      : 'text-muted-foreground/30 cursor-not-allowed'
-                  }`}
-                  title={
-                    signalingStatus === 'connected'
-                      ? 'Create new room'
-                      : 'Signaling server required for room creation'
-                  }
+                  className="p-1 rounded transition-colors hover:bg-accent/50 text-muted-foreground hover:text-foreground"
+                  title="Create new room"
                 >
                   <Plus className="h-3 w-3" />
                 </button>
@@ -201,8 +233,8 @@ function HouseViewPage() {
                 Invite Code
               </h3>
               <div className="flex items-center gap-2">
-                <div className="flex-1 px-3 py-2 bg-background border border-border rounded-md">
-                  <code className="text-sm font-mono tracking-wider">{house.invite_code}</code>
+              <div className="flex-1 px-3 py-2 bg-background border border-border rounded-md">
+                  <code className="text-xs font-mono break-all">{getInviteUriForCurrentServer() || house.invite_uri}</code>
                 </div>
                 <Button
                   onClick={copyInviteCode}
@@ -309,6 +341,43 @@ function HouseViewPage() {
                       {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                     </Button>
                   </div>
+
+                  {/* Remote Peers */}
+                  {peers.size > 0 && (
+                    <div className="mt-4 pt-4 border-t-2 border-border space-y-2">
+                      <p className="text-xs text-muted-foreground font-light uppercase tracking-wide mb-2">
+                        Connected Peers ({peers.size})
+                      </p>
+                      {Array.from(peers.entries()).map(([peerId, info]) => {
+                        // Find peer display name from house members
+                        const peerMember = house?.members.find(m => m.user_id === peerId)
+                        const displayName = peerMember?.display_name || peerId.substring(0, 8)
+
+                        return (
+                          <div key={peerId} className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                                <span className="text-xs font-light">
+                                  {displayName.charAt(0).toUpperCase()}
+                                </span>
+                              </div>
+                              <div>
+                                <p className="text-sm font-light">{displayName}</p>
+                                <span className="text-xs text-muted-foreground">
+                                  {info.connectionState === 'connected' ? 'Connected' : 'Connecting...'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className={`w-2 h-2 rounded-full ${
+                              info.connectionState === 'connected' ? 'bg-green-500' :
+                              info.connectionState === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+                              'bg-red-500'
+                            }`} />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -373,6 +442,61 @@ function HouseViewPage() {
           </div>
         </div>
       </div>
+
+      {/* Create Room Dialog */}
+      {showCreateRoomDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card border-2 border-border rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-lg font-light mb-4">Create New Room</h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-light block mb-2">Room Name</label>
+                <input
+                  type="text"
+                  value={roomName}
+                  onChange={(e) => setRoomName(e.target.value)}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm"
+                  placeholder="general, voice-chat, etc."
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-light block mb-2">Description (optional)</label>
+                <input
+                  type="text"
+                  value={roomDescription}
+                  onChange={(e) => setRoomDescription(e.target.value)}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm"
+                  placeholder="What's this room for?"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <Button
+                onClick={() => {
+                  setShowCreateRoomDialog(false)
+                  setRoomName('')
+                  setRoomDescription('')
+                }}
+                variant="outline"
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateRoom}
+                disabled={!roomName.trim() || isCreatingRoom}
+                className="flex-1"
+              >
+                {isCreatingRoom ? 'Creating...' : 'Create Room'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

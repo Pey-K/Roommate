@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Upload, Loader2, Key, Shield } from 'lucide-react'
 import { Button } from '../components/ui/button'
-import { useIdentity } from '../contexts/IdentityContext'
+import { importIdentity } from '../lib/tauri'
 
 function IdentityRestorePage() {
   const [isImporting, setIsImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [displayedText, setDisplayedText] = useState('')
   const [isDragging, setIsDragging] = useState(false)
-  const { restoreIdentity } = useIdentity()
   const navigate = useNavigate()
   
   const fullText = 'Restore Your Identity'
@@ -59,8 +58,11 @@ function IdentityRestorePage() {
       const arrayBuffer = await file.arrayBuffer()
       const data = new Uint8Array(arrayBuffer)
       
-      await restoreIdentity(data)
-      navigate('/houses')
+      // Import identity (bootstrap command: creates account + sets session)
+      await importIdentity(data)
+      
+      // Reload to initialize AccountContext with new session
+      window.location.href = '/houses'
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to import identity. The file may be corrupted or invalid.')
       setIsImporting(false)

@@ -136,6 +136,7 @@ export class InputLevelMeter {
   private currentGain: number = 0 // Current smoothed gain for threshold gating
   private useVoiceActivity: boolean = true // false for push-to-talk (raw audio always on)
   private isPttKeyPressed: boolean = false // PTT key state
+  private isTransmissionMuted: boolean = false // Manual mute (overrides VAD/PTT)
 
   async start(
     deviceId: string | null,
@@ -242,6 +243,34 @@ export class InputLevelMeter {
     }
   }
 
+  /**
+   * Get the audio stream for WebRTC transmission.
+   * This stream has VAD/PTT gating applied via monitoringGain.
+   */
+  getTransmissionStream(): MediaStream | null {
+    return this.destination?.stream || null
+  }
+
+  /**
+   * Set whether transmission is muted (independent of VAD/PTT).
+   * When muted, no audio is sent through the transmission stream.
+   *
+   * Note: This overrides VAD/PTT - even if voice is detected or PTT is pressed,
+   * muted audio will not transmit.
+   */
+  setTransmissionMuted(muted: boolean) {
+    if (!this.monitoringGain) return
+
+    // Store mute state to prevent VAD/PTT from overriding it
+    this.isTransmissionMuted = muted
+
+    if (muted) {
+      // Force gain to 0 (muted)
+      this.monitoringGain.gain.value = 0
+    }
+    // If unmuted, VAD/PTT logic in updateLevel() will control the gain
+  }
+
   private updateLevel() {
     if (!this.analyser || !this.dataArray || !this.onLevelUpdate) return
 
@@ -285,7 +314,11 @@ export class InputLevelMeter {
 
     // 6. Apply threshold gating for monitoring (only in voice activity mode)
     if (this.monitoringGain) {
-      if (this.useVoiceActivity) {
+      // Manual mute overrides all gating logic
+      if (this.isTransmissionMuted) {
+        this.monitoringGain.gain.setValueAtTime(0, this.audioContext!.currentTime)
+        this.currentGain = 0 // Reset envelope when muted
+      } else if (this.useVoiceActivity) {
         // Voice Activity mode: gate based on threshold
         const targetGain = level >= this.threshold ? 1.0 : 0.0
 

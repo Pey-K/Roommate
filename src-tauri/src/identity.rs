@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::fs;
 use thiserror::Error;
 
+use crate::account_manager::AccountManager;
+
 #[derive(Error, Debug)]
 pub enum IdentityError {
     #[error("IO error: {0}")]
@@ -23,6 +25,8 @@ pub enum IdentityError {
     Serialization(#[from] serde_json::Error),
     #[error("Hex decoding error: {0}")]
     HexDecode(String),
+    #[error("Account error: {0}")]
+    Account(String),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -43,16 +47,72 @@ struct EncryptedIdentity {
 
 pub struct IdentityManager {
     data_dir: PathBuf,
+    account_id: Option<String>,
 }
 
 impl IdentityManager {
+    /// Create an IdentityManager for the current session's account
+    /// REQUIRES an active session - no fallback behavior
     pub fn new() -> Result<Self, IdentityError> {
-        let data_dir = Self::get_data_dir()?;
-        fs::create_dir_all(&data_dir)?;
-        Ok(Self { data_dir })
+        let account_manager = AccountManager::new()
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        // Check if there's an active session
+        let session = account_manager.get_session()
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        if let Some(account_id) = session.current_account_id {
+            // Account mode: use account container
+            let data_dir = account_manager.get_account_dir(&account_id);
+            fs::create_dir_all(&data_dir)?;
+            Ok(Self {
+                data_dir,
+                account_id: Some(account_id),
+            })
+        } else {
+            // NO SESSION - refuse to operate
+            // The presence of identity files does NOT imply an active session
+            Err(IdentityError::Account("No active session - login required".to_string()))
+        }
     }
 
-    fn get_data_dir() -> Result<PathBuf, IdentityError> {
+    /// Create an IdentityManager for a specific account
+    /// Used for account operations that don't require an active session
+    pub fn for_account(account_id: &str) -> Result<Self, IdentityError> {
+        let account_manager = AccountManager::new()
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        let data_dir = account_manager.get_account_dir(account_id);
+        fs::create_dir_all(&data_dir)?;
+
+        Ok(Self {
+            data_dir,
+            account_id: Some(account_id.to_string()),
+        })
+    }
+
+    /// Check if a specific account has an identity (keys.dat exists)
+    /// This does NOT require an active session - used for account listing/selection
+    pub fn account_has_identity(account_id: &str) -> Result<bool, IdentityError> {
+        let account_manager = AccountManager::new()
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+        
+        let data_dir = account_manager.get_account_dir(account_id);
+        let keys_path = data_dir.join("keys.dat");
+        Ok(keys_path.exists())
+    }
+
+    fn get_legacy_data_dir() -> Result<PathBuf, IdentityError> {
+        // Check for custom data directory (for testing with multiple instances)
+        if let Ok(custom_dir) = std::env::var("ROOMMATE_DATA_DIR") {
+            let path = PathBuf::from(custom_dir);
+            if !path.exists() {
+                fs::create_dir_all(&path)
+                    .map_err(|e| IdentityError::Io(e))?;
+            }
+            return Ok(path);
+        }
+
         #[cfg(target_os = "windows")]
         {
             let app_data = std::env::var("APPDATA")
@@ -62,7 +122,7 @@ impl IdentityManager {
                 )))?;
             Ok(PathBuf::from(app_data).join("Roommate"))
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let home = std::env::var("HOME")
@@ -72,7 +132,7 @@ impl IdentityManager {
                 )))?;
             Ok(PathBuf::from(home).join("Library").join("Application Support").join("Roommate"))
         }
-        
+
         #[cfg(target_os = "linux")]
         {
             let home = std::env::var("HOME")
@@ -82,7 +142,7 @@ impl IdentityManager {
                 )))?;
             Ok(PathBuf::from(home).join(".config").join("roommate"))
         }
-        
+
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             Err(IdentityError::Io(std::io::Error::new(
@@ -100,6 +160,11 @@ impl IdentityManager {
         self.get_keys_path().exists()
     }
 
+    /// Get the account ID if in account mode
+    pub fn get_account_id(&self) -> Option<&str> {
+        self.account_id.as_deref()
+    }
+
     pub fn generate_keypair() -> (SigningKey, VerifyingKey) {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
@@ -111,32 +176,44 @@ impl IdentityManager {
         if display_name.trim().is_empty() {
             return Err(IdentityError::Encryption("Display name cannot be empty".to_string()));
         }
-        
+
         let (signing_key, verifying_key) = Self::generate_keypair();
-        
+
         // Encode keys as hex
         let private_key_hex = hex::encode(signing_key.to_bytes());
         let public_key_hex = hex::encode(verifying_key.to_bytes());
-        
+
         // Generate user ID from public key hash (first 16 bytes as hex = 32 chars)
         let mut hasher = Sha256::new();
         hasher.update(verifying_key.as_bytes());
         let hash = hasher.finalize();
         let user_id = hex::encode(&hash[..16]); // Use first 16 bytes for shorter ID
-        
+
         let identity = UserIdentity {
-            user_id,
+            user_id: user_id.clone(),
             display_name: display_name.trim().to_string(),
             public_key: public_key_hex,
             private_key: Some(private_key_hex),
         };
-        
-        // Save encrypted (passwordless - uses device key)
-        let manager = Self::new()
+
+        // Create account container and set session
+        let account_manager = AccountManager::new()
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        // Create account directory structure
+        account_manager.create_account(&user_id, display_name.trim())
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        // Set this as the current session
+        account_manager.set_session(&user_id)
+            .map_err(|e| IdentityError::Account(e.to_string()))?;
+
+        // Save encrypted identity to the account directory
+        let manager = Self::for_account(&user_id)
             .map_err(|e| IdentityError::Encryption(format!("Failed to initialize identity manager: {}", e)))?;
         manager.save_identity(&identity)
             .map_err(|e| IdentityError::Encryption(format!("Failed to save identity: {}", e)))?;
-        
+
         Ok(identity)
     }
 
@@ -346,5 +423,6 @@ impl IdentityManager {
         
         Ok(identity)
     }
+
 }
 

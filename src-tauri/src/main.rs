@@ -5,17 +5,66 @@ mod identity;
 mod audio_settings;
 mod house;
 mod signaling;
+mod account_manager;
 
 use identity::{IdentityManager, UserIdentity};
 use audio_settings::{AudioSettingsManager, AudioSettings};
-use house::{HouseManager, House};
+use house::{HouseManager, HouseInfo};
 use signaling::{check_signaling_health, get_default_signaling_url};
+use account_manager::{AccountManager, SessionState, AccountInfo};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedHouseHint {
+    signing_pubkey: String,
+    encrypted_state: String,
+    signature: String,
+    last_updated: String,
+}
+
+fn normalize_signaling_to_http(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    if url.starts_with("wss://") {
+        Ok(url.replacen("wss://", "https://", 1).trim_end_matches('/').to_string())
+    } else if url.starts_with("ws://") {
+        Ok(url.replacen("ws://", "http://", 1).trim_end_matches('/').to_string())
+    } else if url.starts_with("https://") || url.starts_with("http://") {
+        Ok(url.trim_end_matches('/').to_string())
+    } else {
+        // Assume TLS by default for user-hosted domains
+        Ok(format!("https://{}", url.trim_end_matches('/')))
+    }
+}
+
+/// Session guard: Ensures an active session exists
+/// Returns the current account ID or an error if no session
+fn require_session() -> Result<String, String> {
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    
+    let session = account_manager.get_session()
+        .map_err(|e| format!("Failed to get session: {}", e))?;
+    
+    session.current_account_id
+        .ok_or_else(|| "No active session - please log in".to_string())
+}
 
 #[tauri::command]
 fn has_identity() -> Result<bool, String> {
+    // NO GUARD: Bootstrap command - can run without session
+    // This is used during initial setup to check if identity exists
+    
     let manager = IdentityManager::new()
         .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
     Ok(manager.has_identity())
+}
+
+#[tauri::command]
+fn check_account_has_identity(account_id: String) -> Result<bool, String> {
+    // Check if an account has identity without requiring active session
+    // Used for account selection screen
+    IdentityManager::account_has_identity(&account_id)
+        .map_err(|e| format!("Failed to check account identity: {}", e))
 }
 
 #[tauri::command]
@@ -26,6 +75,9 @@ fn create_identity(display_name: String) -> Result<UserIdentity, String> {
 
 #[tauri::command]
 fn load_identity() -> Result<UserIdentity, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = IdentityManager::new()
         .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
     manager.load_identity()
@@ -34,6 +86,9 @@ fn load_identity() -> Result<UserIdentity, String> {
 
 #[tauri::command]
 fn export_identity() -> Result<Vec<u8>, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = IdentityManager::new()
         .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
     manager.export_identity()
@@ -42,10 +97,46 @@ fn export_identity() -> Result<Vec<u8>, String> {
 
 #[tauri::command]
 fn import_identity(data: Vec<u8>) -> Result<UserIdentity, String> {
-    let manager = IdentityManager::new()
+    // NO GUARD: Bootstrap command - works without session for initial setup
+    
+    // Parse the identity data
+    #[derive(serde::Deserialize)]
+    struct ExportFormat {
+        version: u8,
+        identity: UserIdentity,
+    }
+    
+    let export: ExportFormat = serde_json::from_slice(&data)
+        .map_err(|_| "Invalid identity file".to_string())?;
+    
+    if export.version != 1 {
+        return Err("Unsupported identity file version".to_string());
+    }
+    
+    let identity = export.identity;
+    let user_id = identity.user_id.clone();
+    let display_name = identity.display_name.clone();
+
+    // Create account container if it doesn't exist
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+
+    if !account_manager.account_exists(&user_id) {
+        account_manager.create_account(&user_id, &display_name)
+            .map_err(|e| format!("Failed to create account: {}", e))?;
+    }
+
+    // Set session explicitly (bootstrap behavior)
+    account_manager.set_session(&user_id)
+        .map_err(|e| format!("Failed to set session: {}", e))?;
+
+    // Save identity to account directory
+    let manager = IdentityManager::for_account(&user_id)
         .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
-    manager.import_identity(&data)
-        .map_err(|e| format!("Failed to import identity: {}", e))
+    manager.save_identity(&identity)
+        .map_err(|e| format!("Failed to save identity: {}", e))?;
+
+    Ok(identity)
 }
 
 #[tauri::command]
@@ -65,31 +156,46 @@ fn save_audio_settings(settings: AudioSettings) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_house(name: String, user_id: String, display_name: String) -> Result<House, String> {
+fn create_house(name: String, user_id: String, display_name: String) -> Result<HouseInfo, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.create_house(name, user_id, display_name)
-        .map_err(|e| format!("Failed to create house: {}", e))
+    let house = manager.create_house(name, user_id, display_name)
+        .map_err(|e| format!("Failed to create house: {}", e))?;
+    Ok(house.to_info())
 }
 
 #[tauri::command]
-fn list_houses() -> Result<Vec<House>, String> {
+fn list_houses() -> Result<Vec<HouseInfo>, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.load_all_houses()
-        .map_err(|e| format!("Failed to load houses: {}", e))
+    let houses = manager.load_all_houses()
+        .map_err(|e| format!("Failed to load houses: {}", e))?;
+    Ok(houses.into_iter().map(|h| h.to_info()).collect())
 }
 
 #[tauri::command]
-fn load_house(house_id: String) -> Result<House, String> {
+fn load_house(house_id: String) -> Result<HouseInfo, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.load_house(&house_id)
-        .map_err(|e| format!("Failed to load house: {}", e))
+    let house = manager.load_house(&house_id)
+        .map_err(|e| format!("Failed to load house: {}", e))?;
+    Ok(house.to_info())
 }
 
 #[tauri::command]
 fn delete_house(house_id: String) -> Result<(), String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
     manager.delete_house(&house_id)
@@ -97,35 +203,126 @@ fn delete_house(house_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn find_house_by_invite(invite_code: String) -> Result<Option<House>, String> {
+fn find_house_by_invite(invite_code: String) -> Result<Option<HouseInfo>, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.find_house_by_invite(&invite_code)
-        .map_err(|e| format!("Failed to find house: {}", e))
+    let house = manager.find_house_by_invite(&invite_code)
+        .map_err(|e| format!("Failed to find house: {}", e))?;
+    Ok(house.map(|h| h.to_info()))
 }
 
 #[tauri::command]
-fn join_house(house_id: String, user_id: String, display_name: String) -> Result<House, String> {
+fn join_house(house_id: String, user_id: String, display_name: String) -> Result<HouseInfo, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.add_member_to_house(&house_id, user_id, display_name)
-        .map_err(|e| format!("Failed to join house: {}", e))
+    let house = manager.add_member_to_house(&house_id, user_id, display_name)
+        .map_err(|e| format!("Failed to join house: {}", e))?;
+    Ok(house.to_info())
 }
 
 #[tauri::command]
-fn add_room(house_id: String, name: String, description: Option<String>) -> Result<House, String> {
+fn add_room(house_id: String, name: String, description: Option<String>) -> Result<HouseInfo, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.add_room_to_house(&house_id, name, description)
-        .map_err(|e| format!("Failed to add room: {}", e))
+    let house = manager.add_room_to_house(&house_id, name, description)
+        .map_err(|e| format!("Failed to add room: {}", e))?;
+    Ok(house.to_info())
 }
 
 #[tauri::command]
-fn remove_room(house_id: String, room_id: String) -> Result<House, String> {
+fn remove_room(house_id: String, room_id: String) -> Result<HouseInfo, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
     let manager = HouseManager::new()
         .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
-    manager.remove_room_from_house(&house_id, &room_id)
-        .map_err(|e| format!("Failed to remove room: {}", e))
+    let house = manager.remove_room_from_house(&house_id, &room_id)
+        .map_err(|e| format!("Failed to remove room: {}", e))?;
+    Ok(house.to_info())
+}
+
+#[tauri::command]
+fn import_house_hint(house: HouseInfo) -> Result<(), String> {
+    // GUARDED: Requires active session (joining a house is a usage action)
+    require_session()?;
+
+    let manager = HouseManager::new()
+        .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
+
+    manager
+        .import_house_hint(house)
+        .map_err(|e| format!("Failed to import house hint: {}", e))
+}
+
+#[tauri::command]
+async fn register_house_hint(signaling_server: String, hint: EncryptedHouseHint) -> Result<(), String> {
+    // Usage command (publishing state) - require session
+    require_session()?;
+
+    let base = normalize_signaling_to_http(&signaling_server)?;
+    let url = format!(
+        "{}/api/houses/{}/register",
+        base,
+        urlencoding::encode(&hint.signing_pubkey)
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .json(&hint)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to POST house hint: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Failed to register house hint: HTTP {}", resp.status()));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_house_hint(signaling_server: String, signing_pubkey: String) -> Result<Option<EncryptedHouseHint>, String> {
+    // Usage command (joining) - require session
+    require_session()?;
+
+    let base = normalize_signaling_to_http(&signaling_server)?;
+    let url = format!(
+        "{}/api/houses/{}/hint",
+        base,
+        urlencoding::encode(&signing_pubkey)
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to GET house hint: {}", e))?;
+
+    if resp.status().as_u16() == 404 {
+        return Ok(None);
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("Failed to get house hint: HTTP {}", resp.status()));
+    }
+
+    let hint = resp
+        .json::<EncryptedHouseHint>()
+        .await
+        .map_err(|e| format!("Failed to parse house hint JSON: {}", e))?;
+
+    Ok(Some(hint))
 }
 
 #[tauri::command]
@@ -161,6 +358,8 @@ async fn get_signaling_server_url(app_handle: tauri::AppHandle) -> Result<String
 
     Ok(config.get("url")
         .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .unwrap_or(&get_default_signaling_url())
         .to_string())
 }
@@ -176,7 +375,7 @@ async fn set_signaling_server_url(app_handle: tauri::AppHandle, url: String) -> 
     let config_file = config_dir.join("signaling.json");
 
     let config = serde_json::json!({
-        "url": url
+        "url": url.trim()
     });
 
     std::fs::write(config_file, serde_json::to_string_pretty(&config).unwrap())
@@ -185,16 +384,83 @@ async fn set_signaling_server_url(app_handle: tauri::AppHandle, url: String) -> 
     Ok(())
 }
 
+// === Account Management Commands ===
+
+#[tauri::command]
+fn list_accounts() -> Result<Vec<String>, String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.list_accounts()
+        .map_err(|e| format!("Failed to list accounts: {}", e))
+}
+
+#[tauri::command]
+fn get_account_info(account_id: String) -> Result<Option<AccountInfo>, String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.get_account_info(&account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))
+}
+
+#[tauri::command]
+fn get_current_session() -> Result<SessionState, String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.get_session()
+        .map_err(|e| format!("Failed to get session: {}", e))
+}
+
+#[tauri::command]
+fn switch_account(account_id: String) -> Result<(), String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+
+    // Verify account exists
+    if !manager.account_exists(&account_id) {
+        return Err(format!("Account {} does not exist", account_id));
+    }
+
+    manager.set_session(&account_id)
+        .map_err(|e| format!("Failed to switch account: {}", e))
+}
+
+#[tauri::command]
+fn logout_account() -> Result<(), String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.clear_session()
+        .map_err(|e| format!("Failed to logout: {}", e))
+}
+
+#[tauri::command]
+fn get_current_account_id() -> Result<Option<String>, String> {
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.get_current_account_id()
+        .map_err(|e| format!("Failed to get current account: {}", e))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            // Identity commands
             has_identity,
+            check_account_has_identity,
             create_identity,
             load_identity,
             export_identity,
             import_identity,
+            // Account management commands
+            list_accounts,
+            get_account_info,
+            get_current_session,
+            switch_account,
+            logout_account,
+            get_current_account_id,
+            // Audio settings commands
             load_audio_settings,
             save_audio_settings,
+            // House commands
             create_house,
             list_houses,
             load_house,
@@ -203,6 +469,10 @@ fn main() {
             join_house,
             add_room,
             remove_room,
+            import_house_hint,
+            register_house_hint,
+            get_house_hint,
+            // Signaling commands
             check_signaling_server,
             get_default_signaling_server,
             get_signaling_server_url,

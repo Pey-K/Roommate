@@ -36,20 +36,20 @@ function TitleBar() {
   return (
     <div className="h-8 bg-background flex items-center select-none flex-shrink-0 relative z-50">
       {/* Top-left resize handle */}
-      <div 
+      <div
         id="resize-top-left"
         className="absolute top-0 left-0 w-3 h-3 cursor-nwse-resize z-50"
-        style={{ WebkitAppRegion: 'no-drag' }}
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       />
-      
+
       {/* Draggable area - entire left side */}
-      <div 
+      <div
         data-tauri-drag-region
         className="flex-1 h-full"
       />
-      
+
       {/* Window controls - fixed to right */}
-      <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' }}>
+      <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <button
           id="titlebar-minimize"
           className="h-8 w-10 flex items-center justify-center hover:bg-accent/50 transition-colors group"

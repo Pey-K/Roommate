@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, Key, WifiOff, Download } from 'lucide-react'
 import { Button } from '../components/ui/button'
-import { useIdentity } from '../contexts/IdentityContext'
+import { createIdentity } from '../lib/tauri'
 
 function IdentitySetupPage() {
   const [displayName, setDisplayName] = useState('')
   const [isCreating, setIsCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [displayedText, setDisplayedText] = useState('')
-  const { createIdentity } = useIdentity()
   const navigate = useNavigate()
   
   const fullText = 'Create Your Identity'
@@ -40,8 +39,11 @@ function IdentitySetupPage() {
     setError(null)
 
     try {
+      // Create identity (also creates account and sets session)
       await createIdentity(displayName.trim())
-      navigate('/houses')
+      
+      // Reload to initialize AccountContext with new session
+      window.location.href = '/houses'
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create identity')
       setIsCreating(false)

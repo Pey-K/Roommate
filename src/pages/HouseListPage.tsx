@@ -1,13 +1,15 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Settings, Users } from 'lucide-react'
+import { Plus, Settings, Users, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { useEffect, useState } from 'react'
-import { listHouses, createHouse, findHouseByInvite, joinHouse, type House } from '../lib/tauri'
+import { useSignaling } from '../contexts/SignalingContext'
+import { listHouses, createHouse, joinHouse, deleteHouse, importHouseHint, type House, parseInviteUri, getHouseHint, registerHouseHint } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
 
 function HouseListPage() {
   const navigate = useNavigate()
   const { identity } = useIdentity()
+  const { signalingUrl, status: signalingStatus } = useSignaling()
   const [houses, setHouses] = useState<House[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isCreating, setIsCreating] = useState(false)
@@ -42,6 +44,18 @@ function HouseListPage() {
         identity.user_id,
         identity.display_name
       )
+
+      // Publish a house hint to the signaling server for cross-user invites (Option A)
+      // This is intentionally shaped so `encrypted_state` can later become a real encrypted blob (Option B).
+      if (signalingStatus === 'connected' && signalingUrl) {
+        registerHouseHint(signalingUrl, {
+          signing_pubkey: newHouse.signing_pubkey,
+          encrypted_state: JSON.stringify(newHouse),
+          signature: '', // TODO (Option B): sign this with user identity key
+          last_updated: new Date().toISOString(),
+        }).catch(e => console.warn('Failed to publish house hint:', e))
+      }
+
       setHouses([...houses, newHouse])
       setShowCreateDialog(false)
       setHouseName('')
@@ -56,46 +70,74 @@ function HouseListPage() {
   const handleJoinHouse = async () => {
     if (!identity || !inviteCode.trim()) return
 
-    const code = inviteCode.trim().toUpperCase()
+    const input = inviteCode.trim()
     setJoinError('')
     setIsCreating(true)
 
     try {
-      // Find house by invite code
-      const matchingHouse = await findHouseByInvite(code)
-
-      if (matchingHouse) {
-        // Check if already a member
-        if (matchingHouse.members.some(m => m.user_id === identity.user_id)) {
-          setJoinError('You are already a member of this house')
-          setIsCreating(false)
-          return
-        }
-
-        // Add user as member
-        const updatedHouse = await joinHouse(
-          matchingHouse.id,
-          identity.user_id,
-          identity.display_name
-        )
-
-        // Update local state
-        const existingHouse = houses.find(h => h.id === updatedHouse.id)
-        if (!existingHouse) {
-          setHouses([...houses, updatedHouse])
-        }
-
-        setShowJoinDialog(false)
-        setInviteCode('')
-        navigate(`/houses/${updatedHouse.id}`)
-      } else {
-        setJoinError('Invalid invite code. House not found.')
+      // Network-backed join: input must be an invite URI (rmmt://{signing_pubkey}@{server})
+      const parsed = parseInviteUri(input)
+      if (!parsed) {
+        setJoinError('Invalid invite. Paste the full invite link (rmmt://...).')
+        return
       }
+
+      const signalingServer =
+        parsed.server.startsWith('ws://') || parsed.server.startsWith('wss://')
+          ? parsed.server
+          : `wss://${parsed.server}`
+
+      // Fetch house hint from signaling server
+      const hint = await getHouseHint(signalingServer, parsed.signingPubkey)
+      if (!hint) {
+        setJoinError('Invite not found on signaling server.')
+        return
+      }
+
+      // For now (Option A), encrypted_state is plaintext JSON of a House object.
+      // Later (Option B), this becomes an encrypted blob; join flow stays the same.
+      const hintedHouse: House = JSON.parse(hint.encrypted_state)
+
+      // Persist the house locally for this account
+      await importHouseHint(hintedHouse)
+
+      // Add current user as member (local membership list)
+      const updatedHouse = await joinHouse(
+        hintedHouse.id,
+        identity.user_id,
+        identity.display_name
+      )
+
+      // Update local list state
+      setHouses(prev => {
+        const exists = prev.some(h => h.id === updatedHouse.id)
+        return exists ? prev.map(h => (h.id === updatedHouse.id ? updatedHouse : h)) : [...prev, updatedHouse]
+      })
+
+      setShowJoinDialog(false)
+      setInviteCode('')
+      navigate(`/houses/${updatedHouse.id}`)
     } catch (error) {
       console.error('Failed to join house:', error)
       setJoinError('Failed to join house. Please try again.')
     } finally {
       setIsCreating(false)
+    }
+  }
+
+  const handleDeleteHouse = async (e: React.MouseEvent, houseId: string, houseName: string) => {
+    e.stopPropagation() // Prevent navigating to house when clicking delete
+
+    if (!confirm(`Are you sure you want to leave and delete "${houseName}"? This cannot be undone.`)) {
+      return
+    }
+
+    try {
+      await deleteHouse(houseId)
+      setHouses(houses.filter(h => h.id !== houseId))
+    } catch (error) {
+      console.error('Failed to delete house:', error)
+      alert('Failed to delete house. Please try again.')
     }
   }
 
@@ -175,24 +217,35 @@ function HouseListPage() {
             </div>
             <div className="grid gap-4">
               {houses.map((house) => (
-                <button
+                <div
                   key={house.id}
-                  onClick={() => navigate(`/houses/${house.id}`)}
-                  className="p-6 border-2 border-border bg-card hover:bg-accent/50 transition-colors text-left rounded-lg"
+                  className="relative group"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-2">
-                      <h3 className="text-lg font-light tracking-tight">{house.name}</h3>
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          {house.members.length} {house.members.length === 1 ? 'member' : 'members'}
-                        </span>
-                        <span>{house.rooms.length} {house.rooms.length === 1 ? 'room' : 'rooms'}</span>
+                  <button
+                    onClick={() => navigate(`/houses/${house.id}`)}
+                    className="w-full p-6 border-2 border-border bg-card hover:bg-accent/50 transition-colors text-left rounded-lg"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-2">
+                        <h3 className="text-lg font-light tracking-tight">{house.name}</h3>
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Users className="h-3 w-3" />
+                            {house.members.length} {house.members.length === 1 ? 'member' : 'members'}
+                          </span>
+                          <span>{house.rooms.length} {house.rooms.length === 1 ? 'room' : 'rooms'}</span>
+                        </div>
                       </div>
+                      <button
+                        onClick={(e) => handleDeleteHouse(e, house.id, house.name)}
+                        className="opacity-0 group-hover:opacity-100 p-2 rounded-md hover:bg-destructive/20 text-destructive transition-opacity"
+                        title="Leave and delete house"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -267,7 +320,8 @@ function HouseListPage() {
                 type="text"
                 value={inviteCode}
                 onChange={(e) => {
-                  setInviteCode(e.target.value.toUpperCase())
+                  // Do NOT uppercase: invite URIs are case-sensitive in practice (and should be accepted as-is).
+                  setInviteCode(e.target.value)
                   setJoinError('')
                 }}
                 onKeyDown={(e) => {
@@ -279,9 +333,8 @@ function HouseListPage() {
                     setJoinError('')
                   }
                 }}
-                placeholder="ABC12345"
-                maxLength={8}
-                className="w-full px-4 py-2 bg-background border border-border rounded-md text-sm font-mono tracking-wider uppercase focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="rmmt://...@your-server"
+                className="w-full px-4 py-2 bg-background border border-border rounded-md text-sm font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-primary"
                 autoFocus
               />
               {joinError && (
@@ -304,7 +357,7 @@ function HouseListPage() {
               <Button
                 onClick={handleJoinHouse}
                 className="flex-1 h-10 bg-foreground text-background hover:bg-foreground/90 font-light"
-                disabled={isCreating || inviteCode.trim().length !== 8}
+                disabled={isCreating || !inviteCode.trim()}
               >
                 {isCreating ? 'Joining...' : 'Join'}
               </Button>
