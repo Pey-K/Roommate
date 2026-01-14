@@ -14,28 +14,31 @@ const Slider = React.forwardRef<HTMLInputElement, SliderProps>(
       onChange?.(e)
     }
 
-    const percentage = ((value - Number(min)) / (Number(max) - Number(min))) * 100
-    // Account for thumb width (3px = 1.5px radius) so fill extends to center of thumb
-    const thumbRadius = 1.5
-    const fillWidth = `calc(${percentage}% + ${thumbRadius}px)`
+    const minN = Number(min)
+    const maxN = Number(max)
+    const denom = maxN - minN
+    const percentage = denom === 0 ? 0 : ((value - minN) / denom) * 100
+    // Keep the filled track strictly aligned to the value percent.
+    // (No pixel offset: avoids the fill "creeping" past the square thumb near max.)
+    const fillWidth = percentage <= 0 ? '0%' : percentage >= 100 ? '100%' : `${percentage}%`
 
     return (
-      <div className="relative w-full">
+      <div className="relative w-full h-3 flex items-center">
         {/* Track background */}
-        <div className="absolute inset-0 h-1 bg-secondary/50 rounded-full" />
+        <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1 bg-secondary/50 rounded-none" />
         {/* Filled track - extends to thumb center */}
         <div
-          className="absolute left-0 top-0 h-1 bg-foreground/30 rounded-full"
+          className="absolute left-0 top-1/2 -translate-y-1/2 h-1 bg-foreground/30 rounded-none"
           style={{ width: fillWidth }}
         />
         {/* Slider input */}
         <input
           type="range"
           className={cn(
-            "relative w-full h-1 bg-transparent appearance-none cursor-pointer",
+            "relative w-full h-3 bg-transparent appearance-none cursor-pointer",
             "focus:outline-none",
-            "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10",
-            "[&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-foreground [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:relative [&::-moz-range-thumb]:z-10",
+            "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-none [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10",
+            "[&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:bg-foreground [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:relative [&::-moz-range-thumb]:z-10",
             className
           )}
           ref={ref}

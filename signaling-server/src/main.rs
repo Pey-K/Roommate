@@ -118,6 +118,55 @@ enum SignalingMessage {
         #[serde(default)]
         active_signing_pubkey: Option<SigningPubkey>,
     },
+
+    // ============================
+    // Profile metadata (NO images)
+    // ============================
+    ProfileAnnounce {
+        user_id: String,
+        display_name: String,
+        #[serde(default)]
+        real_name: Option<String>,
+        #[serde(default)]
+        show_real_name: bool,
+        rev: i64,
+        signing_pubkeys: Vec<SigningPubkey>,
+    },
+
+    /// Client asks for the latest known profile metadata for a set of user_ids relevant to a house.
+    /// (House member lists are opaque to the server, so clients provide the user_ids they care about.)
+    ProfileHello {
+        signing_pubkey: SigningPubkey,
+        user_ids: Vec<String>,
+    },
+
+    /// Server reply to ProfileHello with whatever it currently knows.
+    ProfileSnapshot {
+        signing_pubkey: SigningPubkey,
+        profiles: Vec<ProfileSnapshotRecord>,
+    },
+
+    ProfileUpdate {
+        user_id: String,
+        display_name: String,
+        #[serde(default)]
+        real_name: Option<String>,
+        #[serde(default)]
+        show_real_name: bool,
+        rev: i64,
+        signing_pubkey: SigningPubkey,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProfileSnapshotRecord {
+    user_id: String,
+    display_name: String,
+    #[serde(default)]
+    real_name: Option<String>,
+    #[serde(default)]
+    show_real_name: bool,
+    rev: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +251,14 @@ struct PresenceUser {
     active_signing_pubkey: Option<SigningPubkey>,
 }
 
+#[derive(Debug, Clone)]
+struct ProfileRecord {
+    display_name: String,
+    real_name: Option<String>,
+    show_real_name: bool,
+    rev: i64,
+}
+
 const EVENT_RETENTION_DAYS: i64 = 30;
 
 /// Shared state across all connections
@@ -222,6 +279,9 @@ struct ServerState {
     // === Presence state ===
     presence_conns: HashMap<ConnId, PresenceConn>,
     presence_users: HashMap<String, PresenceUser>,
+
+    // Latest profile metadata per user (no media)
+    profiles: HashMap<String, ProfileRecord>,
 
     // === Event queue state (REST API) ===
     /// Hints only - clients treat local state as authoritative
@@ -244,6 +304,7 @@ impl ServerState {
             conn_peers: HashMap::new(),
             presence_conns: HashMap::new(),
             presence_users: HashMap::new(),
+            profiles: HashMap::new(),
             house_hints: HashMap::new(),
             invite_tokens: HashMap::new(),
             event_queues: HashMap::new(),
@@ -535,6 +596,31 @@ impl ServerState {
         // User still has another connection; keep online.
         None
     }
+
+    fn broadcast_profile_update(&self, signing_pubkey: &SigningPubkey, user_id: &str, rec: &ProfileRecord) {
+        let Some(peers) = self.signing_houses.get(signing_pubkey) else {
+            return;
+        };
+
+        let msg = SignalingMessage::ProfileUpdate {
+            signing_pubkey: signing_pubkey.clone(),
+            user_id: user_id.to_string(),
+            display_name: rec.display_name.clone(),
+            real_name: rec.real_name.clone(),
+            show_real_name: rec.show_real_name,
+            rev: rec.rev,
+        };
+
+        let Ok(json) = serde_json::to_string(&msg) else {
+            return;
+        };
+
+        for peer_id in peers {
+            if let Some(sender) = self.peer_senders.get(peer_id) {
+                let _ = sender.send(hyper_tungstenite::tungstenite::Message::Text(json.clone()));
+            }
+        }
+    }
 }
 
 type SharedState = Arc<Mutex<ServerState>>;
@@ -705,6 +791,54 @@ async fn handle_message(
                 for spk in spks {
                     st.broadcast_presence_update(&spk, &user_id, true, active_signing_pubkey.clone());
                 }
+            }
+            Ok(())
+        }
+        SignalingMessage::ProfileAnnounce { user_id, display_name, real_name, show_real_name, rev, signing_pubkeys } => {
+            let mut st = state.lock().await;
+            let update = match st.profiles.get(&user_id) {
+                Some(existing) => rev > existing.rev,
+                None => true,
+            };
+
+            if update {
+                st.profiles.insert(user_id.clone(), ProfileRecord {
+                    display_name: display_name.clone(),
+                    real_name: real_name.clone(),
+                    show_real_name,
+                    rev,
+                });
+            }
+
+            if let Some(rec) = st.profiles.get(&user_id).cloned() {
+                for spk in signing_pubkeys {
+                    st.broadcast_profile_update(&spk, &user_id, &rec);
+                }
+            }
+            Ok(())
+        }
+        SignalingMessage::ProfileHello { signing_pubkey, user_ids } => {
+            let st = state.lock().await;
+            let mut out: Vec<ProfileSnapshotRecord> = Vec::new();
+            for uid in user_ids {
+                if let Some(rec) = st.profiles.get(&uid) {
+                    out.push(ProfileSnapshotRecord {
+                        user_id: uid.clone(),
+                        display_name: rec.display_name.clone(),
+                        real_name: rec.real_name.clone(),
+                        show_real_name: rec.show_real_name,
+                        rev: rec.rev,
+                    });
+                }
+            }
+
+            let snap = SignalingMessage::ProfileSnapshot {
+                signing_pubkey,
+                profiles: out,
+            };
+
+            if let Ok(json) = serde_json::to_string(&snap) {
+                let _ = sender.send(hyper_tungstenite::tungstenite::Message::Text(json));
             }
             Ok(())
         }

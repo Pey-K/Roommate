@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { ArrowLeft, Settings, Volume2, Copy, Check, Mic, MicOff, PhoneOff, Plus, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/button'
@@ -6,12 +6,15 @@ import { loadHouse, addRoom, removeRoom, type House, type Room, fetchAndImportHo
 import { useIdentity } from '../contexts/IdentityContext'
 import { useWebRTC } from '../contexts/WebRTCContext'
 import { SignalingStatus } from '../components/SignalingStatus'
+import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
 import { useSignaling } from '../contexts/SignalingContext'
+import { usePresence } from '../contexts/PresenceContext'
 
 function HouseViewPage() {
   const { houseId } = useParams<{ houseId: string }>()
   const navigate = useNavigate()
   const { identity } = useIdentity()
+  const { getLevel } = usePresence()
   const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
   const [house, setHouse] = useState<House | null>(null)
@@ -29,6 +32,38 @@ function HouseViewPage() {
   const [deleteRoomTarget, setDeleteRoomTarget] = useState<Room | null>(null)
   const [isDeletingRoom, setIsDeletingRoom] = useState(false)
   const [deleteRoomError, setDeleteRoomError] = useState('')
+
+  const getInitials = (name: string) => {
+    const cleaned = name.trim()
+    if (!cleaned) return '?'
+    const parts = cleaned.split(/\s+/).filter(Boolean)
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return (parts[0][0] + parts[1][0]).toUpperCase()
+  }
+
+  const hashId = (s: string) => {
+    let hash = 0
+    for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0
+    return hash
+  }
+
+  const avatarStyleForUser = (userId: string): CSSProperties => {
+    const h = hashId(userId) % 360
+    return {
+      backgroundColor: `hsl(${h} 60% 78%)`,
+      color: `hsl(${h} 35% 25%)`,
+    }
+  }
+
+  const PresenceSquare = ({ level }: { level: 'active' | 'online' | 'offline' }) => {
+    const cls =
+      level === 'active'
+        ? 'bg-green-500'
+        : level === 'online'
+          ? 'bg-amber-500'
+          : 'bg-muted-foreground'
+    return <div className={`h-2 w-2 ${cls} ring-2 ring-background`} />
+  }
 
   useEffect(() => {
     if (!houseId) {
@@ -291,6 +326,7 @@ function HouseViewPage() {
           </div>
           <div className="flex items-center gap-2">
             <SignalingStatus />
+            <ProfileAvatarChip />
             <Link to="/settings">
               <Button variant="ghost" size="icon" className="h-9 w-9">
                 <Settings className="h-4 w-4" />
@@ -580,10 +616,18 @@ function HouseViewPage() {
                   className="px-3 py-2 rounded-md hover:bg-accent/50 transition-colors"
                 >
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-                      <span className="text-xs font-light">
-                        {member.display_name.charAt(0).toUpperCase()}
-                      </span>
+                    <div className="relative">
+                      <div
+                        className="w-8 h-8 grid place-items-center rounded-none text-[10px] font-mono tracking-wider ring-2 ring-background"
+                        style={avatarStyleForUser(member.user_id)}
+                        title={member.display_name}
+                      >
+                        {getInitials(member.display_name)}
+                      </div>
+                      {/* Presence badge "attached" to the avatar */}
+                      <div className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                        <PresenceSquare level={getLevel(house.signing_pubkey, member.user_id)} />
+                      </div>
                     </div>
                     <span className="text-sm font-light truncate">{member.display_name}</span>
                   </div>

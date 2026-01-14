@@ -158,3 +158,12 @@ select:focus option:checked {
   color: hsl(var(--accent-foreground));
 }
 
+/* react-easy-crop: fade grid in only while interacting */
+.rmmt-cropper .reactEasyCrop_Grid {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.rmmt-cropper.rmmt-cropper--grid .reactEasyCrop_Grid {
+  opacity: 1;
+}
+

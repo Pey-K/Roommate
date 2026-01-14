@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, User, Volume2, Info, Wifi } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { SignalingStatus } from '../components/SignalingStatus'
+import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
 import { AccountSettings } from './settings/AccountSettings'
 import { AudioSettingsPage } from './settings/AudioSettings'
 import { InfoExportSettings } from './settings/InfoExportSettings'
@@ -60,15 +61,16 @@ function SettingsPage() {
 
           <div className="flex items-center gap-2">
             <SignalingStatus />
+            <ProfileAvatarChip />
           </div>
         </div>
       </header>
 
       {/* Scrollable content (keeps top bar fixed) */}
       <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="container flex gap-8 p-8 py-12">
+        <div className="w-full flex gap-8 py-12">
           {/* Table of Contents */}
-          <aside className="w-48 flex-shrink-0">
+          <aside className="w-48 flex-shrink-0 pl-6">
             <nav className="sticky top-12 space-y-1">
               {pages.map((page) => {
                 const Icon = page.icon
@@ -104,7 +106,7 @@ function SettingsPage() {
           </aside>
 
           {/* Content Area */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 pr-6">
             <div className="max-w-3xl">
               <div key={activePage} className="animate-fade-in">
                 {activePage === 'account' && <AccountSettings />}

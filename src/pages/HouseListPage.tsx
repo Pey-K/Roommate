@@ -4,10 +4,14 @@ import { Button } from '../components/ui/button'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useSignaling } from '../contexts/SignalingContext'
 import { SignalingStatus } from '../components/SignalingStatus'
+import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
+import { UserProfileCard } from '../components/UserProfileCard'
 import { listHouses, createHouse, deleteHouse, type House, parseInviteUri, publishHouseHintOpaque, publishHouseHintMemberLeft, redeemTemporaryInvite } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useAccount } from '../contexts/AccountContext'
+import { useProfile } from '../contexts/ProfileContext'
+import { useRemoteProfiles } from '../contexts/RemoteProfilesContext'
 
 function HouseListPage() {
   const navigate = useNavigate()
@@ -15,6 +19,8 @@ function HouseListPage() {
   const { currentAccountId } = useAccount()
   const { getLevel } = usePresence()
   const { signalingUrl, status: signalingStatus } = useSignaling()
+  const { profile } = useProfile()
+  const remoteProfiles = useRemoteProfiles()
   const [houses, setHouses] = useState<House[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isCreating, setIsCreating] = useState(false)
@@ -28,6 +34,16 @@ function HouseListPage() {
   const joinInputRef = useRef<HTMLInputElement | null>(null)
   const createInputRef = useRef<HTMLInputElement | null>(null)
   const [favoriteHouseIds, setFavoriteHouseIds] = useState<Set<string>>(new Set())
+  const [profileCardUserId, setProfileCardUserId] = useState<string | null>(null)
+  const [profileCardAnchor, setProfileCardAnchor] = useState<DOMRect | null>(null)
+
+  const fallbackNameForUser = (userId: string) => {
+    for (const h of houses) {
+      const m = h.members.find(mm => mm.user_id === userId)
+      if (m?.display_name) return m.display_name
+    }
+    return 'Unknown'
+  }
 
   useEffect(() => {
     loadHouses()
@@ -146,6 +162,21 @@ function HouseListPage() {
       )
     }
 
+    const resolveProfile = (userId: string, fallbackName: string) => {
+      const isSelf = Boolean(identity?.user_id && identity.user_id === userId)
+      if (isSelf) {
+        const displayName = profile.display_name ?? identity?.display_name ?? fallbackName
+        const secondaryName = profile.show_real_name ? profile.real_name : null
+        return { displayName, secondaryName, avatarDataUrl: profile.avatar_data_url }
+      }
+      const rp = remoteProfiles.getProfile(userId)
+      return {
+        displayName: rp?.display_name || fallbackName,
+        secondaryName: rp?.show_secondary ? rp.secondary_name : null,
+        avatarDataUrl: null,
+      }
+    }
+
     return (
       <div
         className="relative h-7 isolation-isolate"
@@ -154,21 +185,34 @@ function HouseListPage() {
         {visible.map((m, i) => (
           (() => {
             const level = getLevel(house.signing_pubkey, m.user_id)
+            const p = resolveProfile(m.user_id, m.display_name)
             return (
           <div
             key={m.user_id}
             className="absolute top-0 z-[var(--z)] hover:z-50"
             style={{ left: i * stepPx, ['--z' as any]: i }}
           >
-            <div className="relative group/avatar">
-              <div
-                className="relative h-7 w-7 grid place-items-center rounded-none text-[10px] font-mono tracking-wider ring-2 ring-background will-change-transform transition-transform duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.06]"
-                style={avatarStyleForUser(m.user_id)}
-                aria-label={m.display_name}
+            <div className="relative">
+              <button
+                type="button"
+                className="relative h-7 w-7 grid place-items-center rounded-none ring-2 ring-background will-change-transform transition-transform duration-200 ease-out hover:-translate-y-0.5 hover:scale-[1.06] focus:outline-none group/avatar"
+                style={!p.avatarDataUrl ? avatarStyleForUser(m.user_id) : undefined}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setProfileCardUserId(m.user_id)
+                  setProfileCardAnchor((e.currentTarget as HTMLElement).getBoundingClientRect())
+                }}
+                aria-label={p.displayName}
               >
-                {getInitials(m.display_name)}
+                {p.avatarDataUrl ? (
+                  <div className="absolute inset-0 overflow-hidden">
+                    <img src={p.avatarDataUrl} alt={p.displayName} className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <span className="text-[10px] font-mono tracking-wider">{getInitials(p.displayName)}</span>
+                )}
                 <PresenceMark level={level} />
-              </div>
+              </button>
 
               {/* Tooltip */}
               <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-popover border-2 border-border rounded-md shadow-lg opacity-0 invisible group-hover/avatar:opacity-100 group-hover/avatar:visible transition-all duration-200 pointer-events-none whitespace-nowrap">
@@ -180,7 +224,12 @@ function HouseListPage() {
                   ) : (
                     <div className="h-2 w-2 bg-muted-foreground" />
                   )}
-                  <p className="text-xs font-light">{m.display_name}</p>
+                  <div className="leading-tight">
+                    <p className="text-xs font-light">{p.displayName}</p>
+                    {p.secondaryName ? (
+                      <p className="text-[11px] text-muted-foreground font-light">{p.secondaryName}</p>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>
@@ -370,6 +419,7 @@ function HouseListPage() {
           </div>
           <div className="flex items-center gap-2">
             <SignalingStatus />
+            <ProfileAvatarChip />
             <Link to="/settings">
               <Button variant="ghost" size="icon" className="h-9 w-9">
                 <Settings className="h-4 w-4" />
@@ -438,7 +488,7 @@ function HouseListPage() {
                                   setJoinError('')
                                 }
                               }}
-                              placeholder="Invite code or rmmt://..."
+                              placeholder="Invite code"
                               className="w-full bg-transparent outline-none text-[11px] font-mono tracking-wider"
                               autoComplete="off"
                               spellCheck={false}
@@ -686,6 +736,42 @@ function HouseListPage() {
           </div>
         </div>
       )}
+
+      <UserProfileCard
+        open={Boolean(profileCardUserId)}
+        anchorRect={profileCardAnchor}
+        onClose={() => {
+          setProfileCardUserId(null)
+          setProfileCardAnchor(null)
+        }}
+        avatarDataUrl={profileCardUserId && identity?.user_id === profileCardUserId ? profile.avatar_data_url : null}
+        fallbackColorStyle={profileCardUserId ? avatarStyleForUser(profileCardUserId) : undefined}
+        initials={getInitials(
+          profileCardUserId
+            ? identity?.user_id === profileCardUserId
+              ? profile.display_name ?? identity?.display_name ?? ''
+              : remoteProfiles.getProfile(profileCardUserId)?.display_name ?? fallbackNameForUser(profileCardUserId)
+            : ''
+        )}
+        displayName={
+          profileCardUserId
+            ? identity?.user_id === profileCardUserId
+              ? profile.display_name ?? identity?.display_name ?? ''
+              : remoteProfiles.getProfile(profileCardUserId)?.display_name ?? fallbackNameForUser(profileCardUserId)
+            : ''
+        }
+        secondaryName={
+          profileCardUserId
+            ? identity?.user_id === profileCardUserId
+              ? profile.show_real_name
+                ? profile.real_name
+                : null
+              : remoteProfiles.getProfile(profileCardUserId)?.show_secondary
+                ? remoteProfiles.getProfile(profileCardUserId)?.secondary_name ?? null
+                : null
+            : null
+        }
+      />
     </div>
   )
 }

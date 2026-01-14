@@ -3,6 +3,8 @@ import { useAccount } from '../contexts/AccountContext'
 import { useIdentity } from '../contexts/IdentityContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useSignaling } from '../contexts/SignalingContext'
+import { useProfile } from '../contexts/ProfileContext'
+import { useRemoteProfiles } from '../contexts/RemoteProfilesContext'
 import { fetchAndImportHouseHintOpaque, listHouses } from '../lib/tauri'
 
 /**
@@ -16,6 +18,8 @@ export function HouseSyncBootstrap() {
   const { identity } = useIdentity()
   const presence = usePresence()
   const { status: signalingStatus, signalingUrl } = useSignaling()
+  const { profile } = useProfile()
+  const remoteProfiles = useRemoteProfiles()
   const ranForSessionRef = useRef<string | null>(null)
   const isSyncingRef = useRef(false)
   const wsRef = useRef<WebSocket | null>(null)
@@ -69,6 +73,48 @@ export function HouseSyncBootstrap() {
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
 
+      const sendProfileAnnounce = async () => {
+        if (!identity?.user_id) return
+        if (ws.readyState !== WebSocket.OPEN) return
+        try {
+          const houses = await listHouses()
+          const signingPubkeys = houses.map(h => h.signing_pubkey)
+          ws.send(
+            JSON.stringify({
+              type: 'ProfileAnnounce',
+              user_id: identity.user_id,
+              display_name: profile.display_name || identity.display_name,
+              real_name: profile.show_real_name ? profile.real_name : null,
+              show_real_name: Boolean(profile.show_real_name),
+              rev: Number(profile.updated_at ? Date.parse(profile.updated_at) : 0),
+              signing_pubkeys: signingPubkeys,
+            })
+          )
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      const sendProfileHello = async () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return
+        try {
+          const houses = await listHouses()
+          for (const h of houses) {
+            const ids = Array.from(new Set(h.members.map(m => m.user_id).filter(Boolean)))
+            if (ids.length === 0) continue
+            ws.send(
+              JSON.stringify({
+                type: 'ProfileHello',
+                signing_pubkey: h.signing_pubkey,
+                user_ids: ids,
+              })
+            )
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       const sendPresenceHello = async () => {
         if (!identity?.user_id) return
         if (ws.readyState !== WebSocket.OPEN) return
@@ -108,6 +154,8 @@ export function HouseSyncBootstrap() {
           subscribedSigningPubkeysRef.current = nextSet
           // Presence set may have changed (new house joined/imported)
           sendPresenceHello()
+          sendProfileAnnounce()
+          sendProfileHello()
         } catch (e) {
           console.warn('[HouseSyncBootstrap] Failed to resubscribe after house list change:', e)
         }
@@ -132,6 +180,8 @@ export function HouseSyncBootstrap() {
           subscribedSigningPubkeysRef.current = nextSet
           // Announce presence after subscriptions are set up
           await sendPresenceHello()
+          await sendProfileAnnounce()
+          await sendProfileHello()
         } catch (e) {
           console.warn('[HouseSyncBootstrap] Failed to subscribe houses over WS:', e)
         }
@@ -163,6 +213,31 @@ export function HouseSyncBootstrap() {
             const online: boolean = msg.online
             const active: string | null | undefined = msg.active_signing_pubkey
             presence.applyUpdate(spk, userId, online, active ?? null)
+            return
+          }
+
+          if (msg.type === 'ProfileUpdate') {
+            remoteProfiles.applyUpdate({
+              user_id: String(msg.user_id),
+              display_name: String(msg.display_name || ''),
+              secondary_name: msg.show_real_name ? (msg.real_name ?? null) : null,
+              show_secondary: Boolean(msg.show_real_name),
+              rev: Number(msg.rev || 0),
+            })
+            return
+          }
+
+          if (msg.type === 'ProfileSnapshot') {
+            const profiles = (msg.profiles as Array<any>) || []
+            for (const p of profiles) {
+              remoteProfiles.applyUpdate({
+                user_id: String(p.user_id),
+                display_name: String(p.display_name || ''),
+                secondary_name: p.show_real_name ? (p.real_name ?? null) : null,
+                show_secondary: Boolean(p.show_real_name),
+                rev: Number(p.rev || 0),
+              })
+            }
             return
           }
         } catch (e) {
@@ -217,12 +292,14 @@ export function HouseSyncBootstrap() {
 
       window.addEventListener('roommate:house-removed', onHouseRemoved)
       window.addEventListener('roommate:houses-updated', onHousesUpdated)
+      window.addEventListener('roommate:profile-updated', sendProfileAnnounce as any)
       window.addEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
 
       // Ensure listeners are cleaned up when the WS is replaced.
       const cleanupListeners = () => {
         window.removeEventListener('roommate:house-removed', onHouseRemoved)
         window.removeEventListener('roommate:houses-updated', onHousesUpdated)
+        window.removeEventListener('roommate:profile-updated', sendProfileAnnounce as any)
         window.removeEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
       }
       ws.addEventListener('close', cleanupListeners, { once: true })

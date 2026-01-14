@@ -265,11 +265,13 @@ export function AudioSettingsPage() {
   const currentDb = Math.round(-100 + (audioSettings.input_sensitivity * 100))
 
   return (
-    <div className="bg-card/50 backdrop-blur-sm border border-border/50 p-8 space-y-8">
+    <div className="bg-card/50 backdrop-blur-sm border border-border/50 space-y-8">
       {/* Header */}
       <div className="space-y-1">
-        <div className="w-12 h-px bg-foreground/20"></div>
-        <h2 className="text-lg font-light tracking-tight">Audio Settings</h2>
+        <div className="inline-block">
+          <h2 className="text-lg font-light tracking-tight">Audio Settings</h2>
+          <div className="h-px bg-foreground/20 mt-1 w-full"></div>
+        </div>
         <p className="text-xs text-muted-foreground font-light">Configure your audio devices and preferences</p>
       </div>
 

@@ -39,10 +39,12 @@ export function InfoExportSettings() {
 
   return (
     <div className="space-y-8">
-      <div className="bg-card/50 backdrop-blur-sm border border-border/50 p-8 space-y-6">
+      <div className="bg-card/50 backdrop-blur-sm border border-border/50 space-y-6">
         <div className="space-y-1">
-          <div className="w-12 h-px bg-foreground/20"></div>
-          <h2 className="text-lg font-light tracking-tight">Backup & Export</h2>
+          <div className="inline-block">
+            <h2 className="text-lg font-light tracking-tight">Backup & Export</h2>
+            <div className="h-px bg-foreground/20 mt-1 w-full"></div>
+          </div>
           <p className="text-xs text-muted-foreground font-light">Export your identity for backup</p>
         </div>
         <div className="space-y-4">
@@ -75,17 +77,19 @@ export function InfoExportSettings() {
         </div>
       </div>
 
-      <div className="bg-card/50 backdrop-blur-sm border border-border/50 p-8 space-y-6">
+      <div className="bg-card/50 backdrop-blur-sm border border-border/50 space-y-6">
         <div className="space-y-1">
-          <div className="w-12 h-px bg-foreground/20"></div>
-          <h2 className="text-lg font-light tracking-tight">About</h2>
+          <div className="inline-block">
+            <h2 className="text-lg font-light tracking-tight">About</h2>
+            <div className="h-px bg-foreground/20 mt-1 w-full"></div>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground font-light">
           Roommate v1.0.0
         </p>
       </div>
 
-      <div className="bg-card/50 backdrop-blur-sm border border-border/50 p-8 space-y-6">
+      <div className="bg-card/50 backdrop-blur-sm border border-border/50 space-y-6">
         <Button
           variant="outline"
           className="w-full h-11 font-light border-destructive/50 text-destructive hover:bg-destructive/10"
