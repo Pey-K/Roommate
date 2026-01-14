@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
+#[cfg(feature = "postgres")]
+use sqlx::{PgPool, postgres::PgPoolOptions};
+
 type PeerId = String;
 type HouseId = String;
 type SigningPubkey = String;
@@ -259,6 +262,79 @@ struct ProfileRecord {
     rev: i64,
 }
 
+#[cfg(feature = "postgres")]
+async fn init_db(pool: &PgPool) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS profiles (
+          user_id TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          real_name TEXT,
+          show_real_name BOOLEAN NOT NULL,
+          rev BIGINT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL
+        );
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("init_db profiles: {}", e))?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn upsert_profile_db(pool: &PgPool, user_id: &str, rec: &ProfileRecord) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        INSERT INTO profiles (user_id, display_name, real_name, show_real_name, rev, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (user_id) DO UPDATE
+        SET display_name = EXCLUDED.display_name,
+            real_name = EXCLUDED.real_name,
+            show_real_name = EXCLUDED.show_real_name,
+            rev = EXCLUDED.rev,
+            updated_at = NOW()
+        WHERE profiles.rev < EXCLUDED.rev;
+        "#,
+    )
+    .bind(user_id)
+    .bind(&rec.display_name)
+    .bind(&rec.real_name)
+    .bind(rec.show_real_name)
+    .bind(rec.rev)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("upsert_profile_db: {}", e))?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn load_profiles_db(pool: &PgPool, user_ids: &[String]) -> Result<Vec<ProfileSnapshotRecord>, String> {
+    // NOTE: We intentionally don’t expose updated_at; rev is the authoritative ordering.
+    let rows = sqlx::query!(
+        r#"
+        SELECT user_id, display_name, real_name, show_real_name, rev
+        FROM profiles
+        WHERE user_id = ANY($1)
+        "#,
+        user_ids
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("load_profiles_db: {}", e))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ProfileSnapshotRecord {
+            user_id: r.user_id,
+            display_name: r.display_name,
+            real_name: r.real_name,
+            show_real_name: r.show_real_name,
+            rev: r.rev,
+        })
+        .collect())
+}
+
 const EVENT_RETENTION_DAYS: i64 = 30;
 
 /// Shared state across all connections
@@ -283,6 +359,10 @@ struct ServerState {
     // Latest profile metadata per user (no media)
     profiles: HashMap<String, ProfileRecord>,
 
+    // Optional durable backends
+    #[cfg(feature = "postgres")]
+    db: Option<PgPool>,
+
     // === Event queue state (REST API) ===
     /// Hints only - clients treat local state as authoritative
     house_hints: HashMap<SigningPubkey, EncryptedHouseHint>,
@@ -305,6 +385,8 @@ impl ServerState {
             presence_conns: HashMap::new(),
             presence_users: HashMap::new(),
             profiles: HashMap::new(),
+            #[cfg(feature = "postgres")]
+            db: None,
             house_hints: HashMap::new(),
             invite_tokens: HashMap::new(),
             event_queues: HashMap::new(),
@@ -795,48 +877,86 @@ async fn handle_message(
             Ok(())
         }
         SignalingMessage::ProfileAnnounce { user_id, display_name, real_name, show_real_name, rev, signing_pubkeys } => {
-            let mut st = state.lock().await;
-            let update = match st.profiles.get(&user_id) {
-                Some(existing) => rev > existing.rev,
-                None => true,
+            let (rec_opt, db_opt) = {
+                let mut st = state.lock().await;
+                let update = match st.profiles.get(&user_id) {
+                    Some(existing) => rev > existing.rev,
+                    None => true,
+                };
+
+                if update {
+                    st.profiles.insert(
+                        user_id.clone(),
+                        ProfileRecord {
+                            display_name: display_name.clone(),
+                            real_name: real_name.clone(),
+                            show_real_name,
+                            rev,
+                        },
+                    );
+                }
+
+                let rec = st.profiles.get(&user_id).cloned();
+                if let Some(ref r) = rec {
+                    for spk in signing_pubkeys.iter() {
+                        st.broadcast_profile_update(spk, &user_id, r);
+                    }
+                }
+
+                #[cfg(feature = "postgres")]
+                let db = st.db.clone();
+                #[cfg(not(feature = "postgres"))]
+                let db: Option<()> = None;
+
+                (rec, db)
             };
 
-            if update {
-                st.profiles.insert(user_id.clone(), ProfileRecord {
-                    display_name: display_name.clone(),
-                    real_name: real_name.clone(),
-                    show_real_name,
-                    rev,
-                });
+            // Persist the latest profile so offline users can catch up even after restarts.
+            #[cfg(feature = "postgres")]
+            if let (Some(pool), Some(rec)) = (db_opt, rec_opt.as_ref()) {
+                let _ = upsert_profile_db(&pool, &user_id, rec).await;
             }
 
-            if let Some(rec) = st.profiles.get(&user_id).cloned() {
-                for spk in signing_pubkeys {
-                    st.broadcast_profile_update(&spk, &user_id, &rec);
-                }
-            }
             Ok(())
         }
         SignalingMessage::ProfileHello { signing_pubkey, user_ids } => {
-            let st = state.lock().await;
-            let mut out: Vec<ProfileSnapshotRecord> = Vec::new();
-            for uid in user_ids {
-                if let Some(rec) = st.profiles.get(&uid) {
-                    out.push(ProfileSnapshotRecord {
+            // Prefer DB if available; otherwise fall back to in-memory cache.
+            #[cfg(feature = "postgres")]
+            let db = { state.lock().await.db.clone() };
+
+            #[cfg(feature = "postgres")]
+            let out: Vec<ProfileSnapshotRecord> = if let Some(pool) = db {
+                load_profiles_db(&pool, &user_ids).await.unwrap_or_default()
+            } else {
+                let st = state.lock().await;
+                user_ids
+                    .iter()
+                    .filter_map(|uid| st.profiles.get(uid).map(|rec| ProfileSnapshotRecord {
                         user_id: uid.clone(),
                         display_name: rec.display_name.clone(),
                         real_name: rec.real_name.clone(),
                         show_real_name: rec.show_real_name,
                         rev: rec.rev,
-                    });
-                }
-            }
-
-            let snap = SignalingMessage::ProfileSnapshot {
-                signing_pubkey,
-                profiles: out,
+                    }))
+                    .collect()
             };
 
+            #[cfg(not(feature = "postgres"))]
+            let out: Vec<ProfileSnapshotRecord> = {
+                let st = state.lock().await;
+                user_ids
+                    .iter()
+                    .filter_map(|uid| st.profiles.get(uid).map(|rec| ProfileSnapshotRecord {
+                        user_id: uid.clone(),
+                        display_name: rec.display_name.clone(),
+                        real_name: rec.real_name.clone(),
+                        show_real_name: rec.show_real_name,
+                        rev: rec.rev,
+                    }))
+                    .collect()
+            };
+
+            let snap = SignalingMessage::ProfileSnapshot { signing_pubkey, profiles: out };
             if let Ok(json) = serde_json::to_string(&snap) {
                 let _ = sender.send(hyper_tungstenite::tungstenite::Message::Text(json));
             }
@@ -1298,6 +1418,26 @@ async fn main() {
 
     let addr: SocketAddr = "0.0.0.0:9001".parse().expect("Invalid address");
     let state = Arc::new(Mutex::new(ServerState::new()));
+
+    // Optional Postgres durability (profiles first; others later)
+    #[cfg(feature = "postgres")]
+    {
+        if let Ok(db_url) = std::env::var("SIGNALING_DB_URL") {
+            match PgPoolOptions::new().max_connections(8).connect(&db_url).await {
+                Ok(pool) => {
+                    if let Err(e) = init_db(&pool).await {
+                        warn!("DB init failed; continuing without DB: {}", e);
+                    } else {
+                        state.lock().await.db = Some(pool);
+                        info!("Postgres enabled (SIGNALING_DB_URL set).");
+                    }
+                }
+                Err(e) => warn!("Failed to connect to Postgres; continuing without DB: {}", e),
+            }
+        } else {
+            info!("Postgres disabled (SIGNALING_DB_URL not set).");
+        }
+    }
 
     // Spawn background task for garbage collection
     let gc_state = state.clone();

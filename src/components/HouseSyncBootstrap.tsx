@@ -73,20 +73,30 @@ export function HouseSyncBootstrap() {
       const ws = new WebSocket(signalingUrl)
       wsRef.current = ws
 
-      const sendProfileAnnounce = async () => {
+      const sendProfileAnnounce = async (override?: {
+        display_name: string | null
+        real_name: string | null
+        show_real_name: boolean
+        updated_at: string | null
+      }) => {
         if (!identity?.user_id) return
         if (ws.readyState !== WebSocket.OPEN) return
         try {
           const houses = await listHouses()
           const signingPubkeys = houses.map(h => h.signing_pubkey)
+          const dn =
+            (override?.display_name ?? profile.display_name) || identity.display_name
+          const show = Boolean(override?.show_real_name ?? profile.show_real_name)
+          const rn = show ? (override?.real_name ?? profile.real_name) : null
+          const updatedAt = override?.updated_at ?? profile.updated_at
           ws.send(
             JSON.stringify({
               type: 'ProfileAnnounce',
               user_id: identity.user_id,
-              display_name: profile.display_name || identity.display_name,
-              real_name: profile.show_real_name ? profile.real_name : null,
-              show_real_name: Boolean(profile.show_real_name),
-              rev: Number(profile.updated_at ? Date.parse(profile.updated_at) : 0),
+              display_name: dn,
+              real_name: rn,
+              show_real_name: show,
+              rev: Number(updatedAt ? Date.parse(updatedAt) : 0),
               signing_pubkeys: signingPubkeys,
             })
           )
@@ -292,14 +302,28 @@ export function HouseSyncBootstrap() {
 
       window.addEventListener('roommate:house-removed', onHouseRemoved)
       window.addEventListener('roommate:houses-updated', onHousesUpdated)
-      window.addEventListener('roommate:profile-updated', sendProfileAnnounce as any)
+      const onProfileUpdated = (ev: Event) => {
+        const detail = (ev as CustomEvent<any>).detail
+        if (detail && typeof detail === 'object') {
+          sendProfileAnnounce({
+            display_name: detail.display_name ?? null,
+            real_name: detail.real_name ?? null,
+            show_real_name: Boolean(detail.show_real_name),
+            updated_at: detail.updated_at ?? null,
+          })
+        } else {
+          // Fallback: send whatever the current context has (may be slightly delayed)
+          setTimeout(() => sendProfileAnnounce(), 0)
+        }
+      }
+      window.addEventListener('roommate:profile-updated', onProfileUpdated as any)
       window.addEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
 
       // Ensure listeners are cleaned up when the WS is replaced.
       const cleanupListeners = () => {
         window.removeEventListener('roommate:house-removed', onHouseRemoved)
         window.removeEventListener('roommate:houses-updated', onHousesUpdated)
-        window.removeEventListener('roommate:profile-updated', sendProfileAnnounce as any)
+        window.removeEventListener('roommate:profile-updated', onProfileUpdated as any)
         window.removeEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
       }
       ws.addEventListener('close', cleanupListeners, { once: true })

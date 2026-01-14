@@ -122,18 +122,32 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const emitProfileUpdated = (next: LocalProfile) => {
+    window.dispatchEvent(
+      new CustomEvent('roommate:profile-updated', {
+        detail: {
+          display_name: next.display_name,
+          real_name: next.real_name,
+          show_real_name: next.show_real_name,
+          updated_at: next.updated_at,
+        },
+      })
+    )
+  }
+
   const saveProfileFields: ProfileContextType['saveProfileFields'] = (fields) => {
     const display = fields.display_name ? clamp(fields.display_name.trim(), MAX_DISPLAY_NAME) : null
     const secondary = fields.real_name ? clamp(fields.real_name.trim(), MAX_SECONDARY_NAME) : null
-    persist({
+    const next: LocalProfile = {
       display_name: display ? display : null,
       avatar_data_url: profile.avatar_data_url,
       avatar_rev: profile.avatar_rev,
       real_name: secondary ? secondary : null,
       show_real_name: fields.show_real_name,
       updated_at: new Date().toISOString(),
-    })
-    window.dispatchEvent(new Event('roommate:profile-updated'))
+    }
+    persist(next)
+    emitProfileUpdated(next)
   }
 
   const setAvatarFromFile: ProfileContextType['setAvatarFromFile'] = async (file) => {
@@ -151,39 +165,42 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
             return await fileToDataUrl(file)
           })()
         : await fileToResizedWebpDataUrl(file, 256)
-    persist({
+    const next: LocalProfile = {
       display_name: profile.display_name ?? null,
       avatar_data_url: dataUrl,
       avatar_rev: (profile.avatar_rev || 0) + 1,
       real_name: profile.real_name ?? null,
       show_real_name: profile.show_real_name ?? false,
       updated_at: new Date().toISOString(),
-    })
-    window.dispatchEvent(new Event('roommate:profile-updated'))
+    }
+    persist(next)
+    emitProfileUpdated(next)
   }
 
   const setAvatarFromDataUrl: ProfileContextType['setAvatarFromDataUrl'] = (dataUrl) => {
-    persist({
+    const next: LocalProfile = {
       display_name: profile.display_name ?? null,
       avatar_data_url: dataUrl,
       avatar_rev: (profile.avatar_rev || 0) + 1,
       real_name: profile.real_name ?? null,
       show_real_name: profile.show_real_name ?? false,
       updated_at: new Date().toISOString(),
-    })
-    window.dispatchEvent(new Event('roommate:profile-updated'))
+    }
+    persist(next)
+    emitProfileUpdated(next)
   }
 
   const clearAvatar = () => {
-    persist({
+    const next: LocalProfile = {
       display_name: profile.display_name ?? null,
       avatar_data_url: null,
       avatar_rev: (profile.avatar_rev || 0) + 1,
       real_name: profile.real_name ?? null,
       show_real_name: profile.show_real_name ?? false,
       updated_at: new Date().toISOString(),
-    })
-    window.dispatchEvent(new Event('roommate:profile-updated'))
+    }
+    persist(next)
+    emitProfileUpdated(next)
   }
 
   const setDisplayName: ProfileContextType['setDisplayName'] = (name) => {
