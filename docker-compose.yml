@@ -6,10 +6,25 @@ services:
     environment:
       - TZ=America/New_York
       - RUST_LOG=info
+      - SIGNALING_DB_URL=postgres://roommate:roommate@postgres:5432/roommate
     ports:
       - "9001:9001"
     restart: unless-stopped
     healthcheck:
       disable: true
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=roommate
+      - POSTGRES_PASSWORD=roommate
+      - POSTGRES_DB=roommate
+    volumes:
+      - signal_pg:/var/lib/postgresql/data
+
+volumes:
+  signal_pg: {}
 
 networks: {}

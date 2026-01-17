@@ -125,8 +125,9 @@ environment:
 The app defaults to `ws://127.0.0.1:9001`.
 
 ### Optional Postgres Durability (Profiles + Invites + House Hints + Events)
-Postgres is **compile-time optional** and **runtime optional**. When enabled it persists
-the event queue and acknowledgements for reliable offline catch-up.
+Postgres is **compile-time optional** and **runtime optional**. The `latest` image now
+ships with Postgres support enabled by default; you only need to set `SIGNALING_DB_URL`.
+When enabled it persists the event queue and acknowledgements for reliable offline catch-up.
 
 - Build with `--features postgres` (or `SIGNALING_FEATURES=postgres` in Docker)
 - Set `SIGNALING_DB_URL` at runtime
@@ -137,15 +138,16 @@ SIGNALING_DB_URL=postgres://user:pass@localhost:5432/roommate \
 cargo run --features postgres
 ```
 
-**Docker (build with features):**
-```bash
-SIGNALING_FEATURES=postgres docker-compose up -d --build
-```
-
-Then set the runtime env var in `docker-compose.yml`:
+**Docker (prebuilt image):**
+Just set the runtime env var in `docker-compose.yml`:
 ```yaml
 environment:
   - SIGNALING_DB_URL=postgres://user:pass@db:5432/roommate
+```
+
+**Docker (build from source):**
+```bash
+SIGNALING_FEATURES=postgres docker-compose up -d --build
 ```
 
 **Note:** the prebuilt image in `deploy/docker-compose.yml` does not include optional features.

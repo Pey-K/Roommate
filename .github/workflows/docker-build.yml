@@ -43,9 +43,9 @@ jobs:
             signaling-server/target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build Rust binary
+      - name: Build Rust binary (postgres enabled)
         working-directory: ./signaling-server
-        run: cargo build --release
+        run: cargo build --release --features postgres
 
       - name: Verify binary exists
         run: |
