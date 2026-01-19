@@ -28,7 +28,7 @@ export async function exportIdentity(): Promise<Uint8Array> {
   return new Uint8Array(data)
 }
 
-export async function importIdentity(data: Uint8Array): Promise<UserIdentity> {
+export async function importIdentity(data: Uint8Array): Promise<{ identity: UserIdentity, profile_json: any }> {
   return await invoke('import_identity', { data: Array.from(data) })
 }
 
@@ -225,6 +225,33 @@ export async function logoutAccount(): Promise<void> {
 
 export async function getCurrentAccountId(): Promise<string | null> {
   return await invoke('get_current_account_id')
+}
+
+export async function exportIdentityForAccount(accountId: string): Promise<Uint8Array> {
+  const data = await invoke<number[]>('export_identity_for_account', { accountId })
+  return new Uint8Array(data)
+}
+
+export async function exportFullIdentity(profileJson?: any): Promise<Uint8Array> {
+  const data = await invoke<number[]>('export_full_identity', { profileJson })
+  return new Uint8Array(data)
+}
+
+export async function exportFullIdentityDebug(profileJson?: any): Promise<string> {
+  return await invoke('export_full_identity_debug', { profileJson })
+}
+
+export async function exportFullIdentityForAccount(accountId: string, profileJson?: any): Promise<Uint8Array> {
+  const data = await invoke<number[]>('export_full_identity_for_account', { accountId, profileJson })
+  return new Uint8Array(data)
+}
+
+export async function deleteAccount(accountId: string): Promise<void> {
+  return await invoke('delete_account', { accountId })
+}
+
+export async function registerRooFileAssociation(): Promise<void> {
+  return await invoke('register_roo_file_association_command')
 }
 
 // === Invite URI Helpers ===

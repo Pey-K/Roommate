@@ -8,32 +8,27 @@ import {
   addIceCandidate,
   attachAudioTrack,
   createRemoteAudioElement,
-  closePeerConnection,
-  stopRemoteAudio
+  closePeerConnection
 } from '../lib/webrtc'
 import { useSignaling } from './SignalingContext'
+import { loadAudioSettings } from '../lib/tauri'
 
 /**
  * WebRTC Context for peer-to-peer voice communication.
  *
- * ARCHITECTURAL NOTE: This context currently owns its own WebSocket connection
- * for signaling. This is acceptable for Phase 3a MVP, but long-term we should:
- *
- * 1. Move WebSocket ownership to SignalingContext
- * 2. Have SignalingContext emit/consume signaling messages
- * 3. Keep WebRTCContext focused on peer connection management
- *
- * This prevents:
- * - Duplicate WebSocket connections
- * - Fragmented reconnection/auth logic
- * - Harder Cloudflare/proxy handling
- *
- * TODO: Refactor signaling ownership in Phase 3b or Phase 4
+ * Layer A Implementation: Core correctness with minimal UX.
+ * - Room-scoped voice isolation
+ * - Ephemeral peer_id / stable user_id separation
+ * - Clean join/leave lifecycle
+ * - Barebones reconnect (no exponential backoff)
+ * - ICE state monitoring (logging only, no auto-restart)
  */
 
 export type PeerConnectionState = RTCPeerConnectionState
 
 export interface PeerConnectionInfo {
+  peerId: string               // Ephemeral, for WebRTC routing
+  userId: string               // Stable, for identity display
   connection: RTCPeerConnection
   remoteStream: MediaStream | null
   audioElement: HTMLAudioElement | null
@@ -42,7 +37,7 @@ export interface PeerConnectionInfo {
 
 interface WebRTCContextType {
   // Connection management
-  joinVoice(roomId: string, houseId: string, peerId: string): Promise<void>
+  joinVoice(roomId: string, houseId: string, userId: string): Promise<void>
   leaveVoice(): void
 
   // Local controls
@@ -52,7 +47,8 @@ interface WebRTCContextType {
   // State
   isInVoice: boolean
   isLocalMuted: boolean
-  peers: Map<string, PeerConnectionInfo>
+  peers: Map<string, PeerConnectionInfo>  // Keyed by peerId
+  currentRoomId: string | null
 
   // Integration
   setInputLevelMeter(meter: InputLevelMeter | null): void
@@ -67,6 +63,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const [isInVoice, setIsInVoice] = useState(false)
   const [isLocalMuted, setIsLocalMuted] = useState(false)
   const [peers, setPeers] = useState<Map<string, PeerConnectionInfo>>(new Map())
+  const [currentRoomId, setCurrentRoomId] = useState<string | null>(null)
 
   // Refs
   const inputLevelMeterRef = useRef<InputLevelMeter | null>(null)
@@ -74,13 +71,21 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const localStreamRef = useRef<MediaStream | null>(null)
   const currentRoomRef = useRef<string | null>(null)
   const currentHouseRef = useRef<string | null>(null)
-  const currentPeerIdRef = useRef<string | null>(null)
+  const currentPeerIdRef = useRef<string | null>(null)   // Ephemeral session ID
+  const currentUserIdRef = useRef<string | null>(null)   // Stable identity
   const outputDeviceRef = useRef<string | null>(null)
+  const isInVoiceRef = useRef<boolean>(false)            // For reconnect logic
+  const peersRef = useRef<Map<string, PeerConnectionInfo>>(new Map())  // For message handlers
+
+  // Keep peersRef in sync with state
+  useEffect(() => {
+    peersRef.current = peers
+  }, [peers])
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      leaveVoice()
+      leaveVoiceInternal()
     }
   }, [])
 
@@ -114,46 +119,94 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     console.log(`[WebRTC] ${newMutedState ? 'Muted' : 'Unmuted'} local audio`)
   }, [isLocalMuted])
 
-  const createPeerConnectionForPeer = useCallback(async (remotePeerId: string): Promise<RTCPeerConnection> => {
+  // Complete cleanup of a single peer connection
+  const cleanupPeerConnection = useCallback((peerId: string, peerInfo: PeerConnectionInfo) => {
+    console.log(`[WebRTC] Cleaning up peer ${peerId} (user ${peerInfo.userId})`)
+
+    // Stop remote audio
+    if (peerInfo.audioElement) {
+      peerInfo.audioElement.pause()
+      peerInfo.audioElement.srcObject = null
+      peerInfo.audioElement.remove()
+    }
+
+    // Close connection - remove all event handlers first
+    if (peerInfo.connection) {
+      peerInfo.connection.ontrack = null
+      peerInfo.connection.onicecandidate = null
+      peerInfo.connection.onconnectionstatechange = null
+      peerInfo.connection.oniceconnectionstatechange = null
+      closePeerConnection(peerInfo.connection)
+    }
+  }, [])
+
+  // Find peer by user_id (for handling reconnects)
+  const findPeerByUserId = useCallback((userId: string): PeerConnectionInfo | undefined => {
+    for (const [_, info] of peersRef.current) {
+      if (info.userId === userId) return info
+    }
+    return undefined
+  }, [])
+
+  const createPeerConnectionForPeer = useCallback(async (remotePeerId: string, remoteUserId: string): Promise<RTCPeerConnection> => {
     const pc = createPeerConnection()
+    const roomId = currentRoomRef.current
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
       if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
         const message = {
-          type: 'IceCandidate',
+          type: 'VoiceIceCandidate',
           from_peer: currentPeerIdRef.current,
           to_peer: remotePeerId,
+          room_id: roomId,
           candidate: JSON.stringify(event.candidate)
         }
         wsRef.current.send(JSON.stringify(message))
-        console.log(`[WebRTC] Sent ICE candidate to ${remotePeerId}`)
+        // Don't log every ICE candidate - too noisy
+      }
+    }
+
+    // Handle ICE connection state changes (Layer A: logging only)
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState
+      console.log(`[WebRTC] ICE state for peer=${remotePeerId} user=${remoteUserId}: ${state}`)
+
+      if (state === 'failed') {
+        console.error(`[WebRTC] ICE FAILED for peer ${remotePeerId} - no automatic restart in Layer A`)
+        // Layer A: No automatic ICE restart. Log clearly and let it fail.
+      }
+
+      if (state === 'disconnected') {
+        console.warn(`[WebRTC] ICE disconnected for peer ${remotePeerId} - may recover automatically`)
+        // May recover automatically. Log but don't act.
       }
     }
 
     // Handle connection state changes
     pc.onconnectionstatechange = () => {
-      console.log(`[WebRTC] Connection to ${remotePeerId}: ${pc.connectionState}`)
+      const state = pc.connectionState
+      console.log(`[WebRTC] Connection state for peer=${remotePeerId} user=${remoteUserId}: ${state}`)
 
       setPeers(prev => {
         const updated = new Map(prev)
         const peerInfo = updated.get(remotePeerId)
         if (peerInfo) {
-          peerInfo.connectionState = pc.connectionState
-          updated.set(remotePeerId, { ...peerInfo })
+          updated.set(remotePeerId, { ...peerInfo, connectionState: state })
         }
         return updated
       })
 
-      // Clean up if connection fails
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      // Clean up if connection fails or closes
+      if (state === 'failed' || state === 'closed') {
+        console.log(`[WebRTC] Connection ${state} for peer ${remotePeerId}, cleaning up`)
         handlePeerDisconnect(remotePeerId)
       }
     }
 
     // Handle remote audio track
     pc.ontrack = (event) => {
-      console.log(`[WebRTC] Received remote track from ${remotePeerId}`)
+      console.log(`[WebRTC] Received remote track from peer=${remotePeerId} user=${remoteUserId}`)
       const remoteStream = event.streams[0]
 
       if (remoteStream) {
@@ -163,9 +216,11 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
           const updated = new Map(prev)
           const peerInfo = updated.get(remotePeerId)
           if (peerInfo) {
-            peerInfo.remoteStream = remoteStream
-            peerInfo.audioElement = audioElement
-            updated.set(remotePeerId, { ...peerInfo })
+            updated.set(remotePeerId, {
+              ...peerInfo,
+              remoteStream,
+              audioElement
+            })
           }
           return updated
         })
@@ -189,35 +244,43 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       const peerInfo = updated.get(remotePeerId)
 
       if (peerInfo) {
-        // Cleanup
-        if (peerInfo.audioElement) {
-          stopRemoteAudio(peerInfo.audioElement)
-        }
-        closePeerConnection(peerInfo.connection)
+        cleanupPeerConnection(remotePeerId, peerInfo)
         updated.delete(remotePeerId)
       }
 
       return updated
     })
-  }, [])
+  }, [cleanupPeerConnection])
 
-  const handleSignalingMessage = useCallback(async (data: any) => {
+  const handleSignalingMessage = useCallback(async (data: string) => {
     const msg = JSON.parse(data)
     console.log('[WebRTC] Received signaling message:', msg.type)
 
     switch (msg.type) {
-      case 'Registered': {
-        const { peers: existingPeers } = msg
-        console.log(`[WebRTC] Registered! Existing peers:`, existingPeers)
+      case 'VoiceRegistered': {
+        const { peers: serverPeers, room_id } = msg
+        console.log(`[WebRTC] Registered in room ${room_id}. Peers:`, serverPeers)
 
-        // Create peer connections for all existing peers
-        for (const remotePeerId of existingPeers) {
+        // Create connections to all existing peers in the room
+        for (const peerInfo of serverPeers) {
+          const { peer_id: remotePeerId, user_id: remoteUserId } = peerInfo
+
+          // Check if we already have a connection to this USER (by user_id)
+          const existingByUserId = findPeerByUserId(remoteUserId)
+          if (existingByUserId) {
+            // Same user, different peer_id (reconnect case)
+            console.log(`[WebRTC] User ${remoteUserId} reconnected with new peer_id, replacing old connection`)
+            handlePeerDisconnect(existingByUserId.peerId)
+          }
+
           try {
-            const pc = await createPeerConnectionForPeer(remotePeerId)
+            const pc = await createPeerConnectionForPeer(remotePeerId, remoteUserId)
 
             setPeers(prev => {
               const updated = new Map(prev)
               updated.set(remotePeerId, {
+                peerId: remotePeerId,
+                userId: remoteUserId,
                 connection: pc,
                 remoteStream: null,
                 audioElement: null,
@@ -229,13 +292,15 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
             // Create and send offer
             const offerSdp = await createOffer(pc)
             const offerMessage = {
-              type: 'Offer',
+              type: 'VoiceOffer',
               from_peer: currentPeerIdRef.current,
+              from_user: currentUserIdRef.current,
               to_peer: remotePeerId,
+              room_id: currentRoomRef.current,
               sdp: offerSdp
             }
             wsRef.current?.send(JSON.stringify(offerMessage))
-            console.log(`[WebRTC] Sent offer to ${remotePeerId}`)
+            console.log(`[WebRTC] Sent VoiceOffer to peer=${remotePeerId} user=${remoteUserId}`)
           } catch (error) {
             console.error(`[WebRTC] Failed to create offer for ${remotePeerId}:`, error)
           }
@@ -243,16 +308,50 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
         break
       }
 
-      case 'Offer': {
-        const { from_peer, sdp } = msg
-        console.log(`[WebRTC] Received offer from ${from_peer}`)
+      case 'VoicePeerJoined': {
+        const { peer_id: remotePeerId, user_id: remoteUserId, room_id } = msg
+        console.log(`[WebRTC] Peer joined: peer=${remotePeerId} user=${remoteUserId} room=${room_id}`)
+
+        // Check if this user already has a connection (shouldn't happen, but handle it)
+        const existingByUserId = findPeerByUserId(remoteUserId)
+        if (existingByUserId) {
+          console.log(`[WebRTC] User ${remoteUserId} already has connection, cleaning up old one`)
+          handlePeerDisconnect(existingByUserId.peerId)
+        }
+
+        // Don't create a connection yet - wait for them to send us an offer
+        // or we'll send one after receiving VoiceRegistered
+        // The new peer will send offers to existing peers
+        break
+      }
+
+      case 'VoicePeerLeft': {
+        const { peer_id: remotePeerId, user_id: remoteUserId, room_id } = msg
+        console.log(`[WebRTC] Peer left: peer=${remotePeerId} user=${remoteUserId} room=${room_id}`)
+
+        handlePeerDisconnect(remotePeerId)
+        break
+      }
+
+      case 'VoiceOffer': {
+        const { from_peer, from_user, sdp } = msg
+        console.log(`[WebRTC] Received VoiceOffer from peer=${from_peer} user=${from_user}`)
 
         try {
-          const pc = await createPeerConnectionForPeer(from_peer)
+          // Check if we already have a connection to this user
+          const existingByUserId = findPeerByUserId(from_user)
+          if (existingByUserId && existingByUserId.peerId !== from_peer) {
+            console.log(`[WebRTC] User ${from_user} reconnected with new peer_id, replacing old connection`)
+            handlePeerDisconnect(existingByUserId.peerId)
+          }
+
+          const pc = await createPeerConnectionForPeer(from_peer, from_user)
 
           setPeers(prev => {
             const updated = new Map(prev)
             updated.set(from_peer, {
+              peerId: from_peer,
+              userId: from_user,
               connection: pc,
               remoteStream: null,
               audioElement: null,
@@ -264,40 +363,44 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
           // Create and send answer
           const answerSdp = await createAnswer(pc, sdp)
           const answerMessage = {
-            type: 'Answer',
+            type: 'VoiceAnswer',
             from_peer: currentPeerIdRef.current,
+            from_user: currentUserIdRef.current,
             to_peer: from_peer,
+            room_id: currentRoomRef.current,
             sdp: answerSdp
           }
           wsRef.current?.send(JSON.stringify(answerMessage))
-          console.log(`[WebRTC] Sent answer to ${from_peer}`)
+          console.log(`[WebRTC] Sent VoiceAnswer to peer=${from_peer}`)
         } catch (error) {
-          console.error(`[WebRTC] Failed to handle offer from ${from_peer}:`, error)
+          console.error(`[WebRTC] Failed to handle VoiceOffer from ${from_peer}:`, error)
         }
         break
       }
 
-      case 'Answer': {
-        const { from_peer, sdp } = msg
-        console.log(`[WebRTC] Received answer from ${from_peer}`)
+      case 'VoiceAnswer': {
+        const { from_peer, from_user, sdp } = msg
+        console.log(`[WebRTC] Received VoiceAnswer from peer=${from_peer} user=${from_user}`)
 
-        const peerInfo = peers.get(from_peer)
+        const peerInfo = peersRef.current.get(from_peer)
         if (peerInfo) {
           try {
             await handleAnswer(peerInfo.connection, sdp)
-            console.log(`[WebRTC] Applied answer from ${from_peer}`)
+            console.log(`[WebRTC] Applied VoiceAnswer from peer=${from_peer}`)
           } catch (error) {
-            console.error(`[WebRTC] Failed to apply answer from ${from_peer}:`, error)
+            console.error(`[WebRTC] Failed to apply VoiceAnswer from ${from_peer}:`, error)
           }
+        } else {
+          console.warn(`[WebRTC] Received VoiceAnswer from unknown peer ${from_peer}`)
         }
         break
       }
 
-      case 'IceCandidate': {
+      case 'VoiceIceCandidate': {
         const { from_peer, candidate } = msg
-        console.log(`[WebRTC] Received ICE candidate from ${from_peer}`)
+        // Don't log every ICE candidate
 
-        const peerInfo = peers.get(from_peer)
+        const peerInfo = peersRef.current.get(from_peer)
         if (peerInfo) {
           try {
             await addIceCandidate(peerInfo.connection, candidate)
@@ -314,56 +417,40 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       }
 
       default:
-        console.warn('[WebRTC] Unknown message type:', msg.type)
+        // Ignore other message types (presence, profile, etc.)
+        break
     }
-  }, [peers, createPeerConnectionForPeer])
+  }, [createPeerConnectionForPeer, handlePeerDisconnect, findPeerByUserId])
 
-  const joinVoice = useCallback(async (roomId: string, houseId: string, peerId: string) => {
-    if (isInVoice) {
-      console.warn('[WebRTC] Already in voice')
+  // Connect to signaling server (used for initial connect and reconnect)
+  const connectToSignaling = useCallback(() => {
+    if (!signalingUrl) {
+      console.error('[WebRTC] Cannot connect: no signalingUrl')
       return
     }
 
-    if (!signalingUrl) {
-      console.error('[WebRTC] No signaling server URL configured')
-      throw new Error('No signaling server configured')
+    if (!currentRoomRef.current || !currentHouseRef.current) {
+      console.error('[WebRTC] Cannot connect: missing room or house')
+      return
     }
 
-    const meter = inputLevelMeterRef.current
-    if (!meter) {
-      console.error('[WebRTC] No InputLevelMeter available')
-      throw new Error('Audio not initialized')
-    }
-
-    console.log(`[WebRTC] Joining voice in room ${roomId} (house ${houseId})`)
-
-    // Get transmission stream from InputLevelMeter
-    const stream = meter.getTransmissionStream()
-    if (!stream) {
-      console.error('[WebRTC] Failed to get transmission stream')
-      throw new Error('Failed to get audio stream')
-    }
-
-    localStreamRef.current = stream
-    currentRoomRef.current = roomId
-    currentHouseRef.current = houseId
-    currentPeerIdRef.current = peerId
-
-    // Connect to signaling server
+    console.log('[WebRTC] Connecting to signaling server...')
     const ws = new WebSocket(signalingUrl)
     wsRef.current = ws
 
     ws.onopen = () => {
       console.log('[WebRTC] Connected to signaling server')
 
-      // Register with house
+      // Register for voice in the room
       const registerMessage = {
-        type: 'Register',
-        house_id: houseId,
-        peer_id: peerId
+        type: 'VoiceRegister',
+        house_id: currentHouseRef.current,
+        room_id: currentRoomRef.current,
+        peer_id: currentPeerIdRef.current,
+        user_id: currentUserIdRef.current
       }
       ws.send(JSON.stringify(registerMessage))
-      console.log('[WebRTC] Sent registration')
+      console.log(`[WebRTC] Sent VoiceRegister: peer=${currentPeerIdRef.current} user=${currentUserIdRef.current}`)
     }
 
     ws.onmessage = (event) => {
@@ -374,48 +461,142 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       console.error('[WebRTC] WebSocket error:', error)
     }
 
-    ws.onclose = () => {
-      console.log('[WebRTC] WebSocket closed')
+    ws.onclose = (event) => {
+      console.log(`[WebRTC] WebSocket closed: code=${event.code} reason=${event.reason}`)
+      wsRef.current = null
+
+      // Layer A: Simple reconnect with fixed 2-second delay
+      if (isInVoiceRef.current && currentRoomRef.current) {
+        console.log('[WebRTC] Attempting reconnect in 2 seconds...')
+        setTimeout(() => {
+          if (isInVoiceRef.current && currentRoomRef.current) {
+            connectToSignaling()
+          }
+        }, 2000)
+      }
+    }
+  }, [signalingUrl, handleSignalingMessage])
+
+  const joinVoice = useCallback(async (roomId: string, houseId: string, userId: string) => {
+    if (isInVoice) {
+      console.warn('[WebRTC] Already in voice, leaving first')
+      leaveVoiceInternal()
     }
 
+    if (!signalingUrl) {
+      console.error('[WebRTC] No signaling server URL configured')
+      throw new Error('No signaling server configured')
+    }
+
+    // Initialize InputLevelMeter on-demand if not already set
+    let meter = inputLevelMeterRef.current
+    if (!meter) {
+      console.log('[WebRTC] Initializing audio on-demand...')
+      try {
+        // Load saved audio settings
+        const audioSettings = await loadAudioSettings()
+
+        // Create and start InputLevelMeter
+        meter = new InputLevelMeter()
+        await meter.start(
+          audioSettings.input_device_id || null,
+          () => {} // No level callback needed for WebRTC
+        )
+
+        // Apply saved settings
+        meter.setGain(audioSettings.input_volume)
+        meter.setThreshold(audioSettings.input_sensitivity)
+        meter.setInputMode(audioSettings.input_mode)
+
+        inputLevelMeterRef.current = meter
+        console.log('[WebRTC] Audio initialized successfully')
+      } catch (error) {
+        console.error('[WebRTC] Failed to initialize audio:', error)
+        throw new Error('Failed to initialize audio. Please check microphone permissions.')
+      }
+    }
+
+    // Generate EPHEMERAL peer_id for this session
+    const peerId = crypto.randomUUID()
+
+    console.log(`[WebRTC] Joining voice: room=${roomId} house=${houseId} peer=${peerId} user=${userId}`)
+
+    // Get transmission stream from InputLevelMeter
+    const stream = meter.getTransmissionStream()
+    if (!stream) {
+      console.error('[WebRTC] Failed to get transmission stream')
+      throw new Error('Failed to get audio stream')
+    }
+
+    // Store refs
+    localStreamRef.current = stream
+    currentRoomRef.current = roomId
+    currentHouseRef.current = houseId
+    currentPeerIdRef.current = peerId
+    currentUserIdRef.current = userId
+
+    // Update state
     setIsInVoice(true)
-  }, [isInVoice, signalingUrl, handleSignalingMessage])
+    setCurrentRoomId(roomId)
+    isInVoiceRef.current = true
+
+    // Connect to signaling
+    connectToSignaling()
+  }, [isInVoice, signalingUrl, connectToSignaling])
+
+  // Internal leave function that doesn't check isInVoice state
+  const leaveVoiceInternal = useCallback(() => {
+    console.log('[WebRTC] Leaving voice - beginning cleanup')
+
+    // 1. Notify server (best effort)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      const unregisterMessage = {
+        type: 'VoiceUnregister',
+        peer_id: currentPeerIdRef.current,
+        room_id: currentRoomRef.current
+      }
+      wsRef.current.send(JSON.stringify(unregisterMessage))
+      console.log('[WebRTC] Sent VoiceUnregister')
+    }
+
+    // 2. Close all peer connections
+    peersRef.current.forEach((peerInfo, peerId) => {
+      cleanupPeerConnection(peerId, peerInfo)
+    })
+    setPeers(new Map())
+    peersRef.current = new Map()
+
+    // 3. Close WebSocket
+    if (wsRef.current) {
+      wsRef.current.onclose = null  // Prevent reconnect handler from firing
+      wsRef.current.close()
+      wsRef.current = null
+    }
+
+    // 4. Clear local stream reference (don't stop tracks - owned by InputLevelMeter)
+    localStreamRef.current = null
+
+    // 5. Clear refs
+    currentPeerIdRef.current = null
+    currentUserIdRef.current = null
+    currentRoomRef.current = null
+    currentHouseRef.current = null
+
+    // 6. Update state
+    setIsInVoice(false)
+    setCurrentRoomId(null)
+    setIsLocalMuted(false)
+    isInVoiceRef.current = false
+
+    console.log('[WebRTC] Cleanup complete')
+  }, [cleanupPeerConnection])
 
   const leaveVoice = useCallback(() => {
     if (!isInVoice) {
       return
     }
-
-    console.log('[WebRTC] Leaving voice')
-
-    // Close all peer connections
-    peers.forEach((peerInfo) => {
-      if (peerInfo.audioElement) {
-        stopRemoteAudio(peerInfo.audioElement)
-      }
-      closePeerConnection(peerInfo.connection)
-    })
-
-    // Clear peers
-    setPeers(new Map())
-
-    // Close WebSocket
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-
-    // Clear refs
-    localStreamRef.current = null
-    currentRoomRef.current = null
-    currentHouseRef.current = null
-    currentPeerIdRef.current = null
-
-    setIsInVoice(false)
-    setIsLocalMuted(false)
-
-    console.log('[WebRTC] Left voice')
-  }, [isInVoice, peers])
+    leaveVoiceInternal()
+  }, [isInVoice, leaveVoiceInternal])
 
   return (
     <WebRTCContext.Provider
@@ -427,6 +608,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
         isInVoice,
         isLocalMuted,
         peers,
+        currentRoomId,
         setInputLevelMeter
       }}
     >

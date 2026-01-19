@@ -7,6 +7,9 @@ mod house;
 mod signaling;
 mod account_manager;
 
+#[cfg(windows)]
+mod file_association;
+
 use identity::{IdentityManager, UserIdentity};
 use audio_settings::{AudioSettingsManager, AudioSettings};
 use house::{HouseManager, HouseInfo};
@@ -234,47 +237,365 @@ fn export_identity() -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-fn import_identity(data: Vec<u8>) -> Result<UserIdentity, String> {
-    // NO GUARD: Bootstrap command - works without session for initial setup
+fn export_identity_for_account(account_id: String) -> Result<Vec<u8>, String> {
+    // NO GUARD: Can export any account's identity (for backup before deletion)
+    let manager = IdentityManager::for_account(&account_id)
+        .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
+    manager.export_identity()
+        .map_err(|e| format!("Failed to export identity: {}", e))
+}
+
+#[tauri::command]
+fn export_full_identity_for_account(
+    account_id: String,
+    profile_json: Option<serde_json::Value>,
+) -> Result<Vec<u8>, String> {
+    // NO GUARD: Can export any account's full identity (for backup before deletion)
+    let identity_manager = IdentityManager::for_account(&account_id)
+        .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
+
+    // Load all houses for this specific account
+    let house_manager = HouseManager::for_account(&account_id)
+        .map_err(|e| format!("Failed to initialize house manager for account {}: {}", account_id, e))?;
     
-    // Parse the identity data
-    #[derive(serde::Deserialize)]
-    struct ExportFormat {
+    let houses = house_manager.load_all_houses()
+        .map_err(|e| format!("Failed to load houses: {}", e))?;
+
+    // Export only essential cryptographic keys (rooms/members come from signaling server)
+    let mut house_data: Vec<serde_json::Value> = Vec::new();
+    for house in houses {
+        if let Some(symmetric_key) = house.get_symmetric_key() {
+            let signing_pubkey = house.signing_pubkey.clone();
+            let invite_uri = house.invite_uri.clone();
+            let invite_code = house.invite_code.clone();
+            
+            let mut house_export = serde_json::json!({
+                "signing_pubkey": signing_pubkey,
+                "symmetric_key_b64": base64::encode(&symmetric_key),
+                "invite_uri": invite_uri,
+            });
+            
+            // Include signing secret if this house was created by the user
+            if let Some(signing_secret) = house.get_signing_secret() {
+                house_export["signing_secret_b64"] = serde_json::Value::String(base64::encode(&signing_secret));
+            }
+            
+            // Include invite_code as fallback if invite_uri is missing
+            if !invite_code.is_empty() {
+                house_export["invite_code"] = serde_json::Value::String(invite_code);
+            }
+            
+            house_data.push(house_export);
+        } else {
+            eprintln!("Warning: House {} has no symmetric key, skipping export", house.id);
+        }
+    }
+
+    // Get signaling server URL from account info
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    let account_info = account_manager.get_account_info(&account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))?
+        .unwrap_or_else(|| AccountInfo {
+            account_id: account_id.clone(),
+            display_name: String::new(),
+            created_at: String::new(),
+            signaling_server_url: None,
+        });
+    let signaling_server_url = account_info.signaling_server_url;
+
+    identity_manager.export_full_identity(profile_json, house_data, signaling_server_url)
+        .map_err(|e| format!("Failed to export full identity: {}", e))
+}
+
+#[tauri::command]
+fn export_full_identity(profile_json: Option<serde_json::Value>) -> Result<Vec<u8>, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
+    let identity_manager = IdentityManager::new()
+        .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
+
+    // Load all houses for current account
+    let house_manager = HouseManager::new()
+        .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
+    
+    let houses = house_manager.load_all_houses()
+        .map_err(|e| format!("Failed to load houses: {}", e))?;
+
+    // Export only essential cryptographic keys (rooms/members come from signaling server)
+    let mut house_data: Vec<serde_json::Value> = Vec::new();
+    for house in houses {
+        if let Some(symmetric_key) = house.get_symmetric_key() {
+            let signing_pubkey = house.signing_pubkey.clone();
+            let invite_uri = house.invite_uri.clone();
+            let invite_code = house.invite_code.clone();
+            
+            let mut house_export = serde_json::json!({
+                "signing_pubkey": signing_pubkey,
+                "symmetric_key_b64": base64::encode(&symmetric_key),
+                "invite_uri": invite_uri,
+            });
+            
+            if let Some(signing_secret) = house.get_signing_secret() {
+                house_export["signing_secret_b64"] = serde_json::Value::String(base64::encode(&signing_secret));
+            }
+            
+            // Include invite_code as fallback if invite_uri is missing
+            if !invite_code.is_empty() {
+                house_export["invite_code"] = serde_json::Value::String(invite_code);
+            }
+            
+            house_data.push(house_export);
+        } else {
+            eprintln!("Warning: House {} has no symmetric key, skipping export", house.id);
+        }
+    }
+
+    // Get signaling server URL from current account
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    let current_account_id = account_manager.get_current_account_id()
+        .map_err(|e| format!("Failed to get current account: {}", e))?
+        .ok_or_else(|| "No active session".to_string())?;
+    let account_info = account_manager.get_account_info(&current_account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))?
+        .unwrap_or_else(|| AccountInfo {
+            account_id: current_account_id,
+            display_name: String::new(),
+            created_at: String::new(),
+            signaling_server_url: None,
+        });
+    let signaling_server_url = account_info.signaling_server_url;
+
+    identity_manager.export_full_identity(profile_json, house_data, signaling_server_url)
+        .map_err(|e| format!("Failed to export full identity: {}", e))
+}
+
+#[tauri::command]
+fn export_full_identity_debug(profile_json: Option<serde_json::Value>) -> Result<String, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
+    let identity_manager = IdentityManager::new()
+        .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
+
+    // Load all houses for current account
+    let house_manager = HouseManager::new()
+        .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
+    
+    let houses = house_manager.load_all_houses()
+        .map_err(|e| format!("Failed to load houses: {}", e))?;
+
+    // Export only essential cryptographic keys (rooms/members come from signaling server)
+    let mut house_data: Vec<serde_json::Value> = Vec::new();
+    for house in houses {
+        if let Some(symmetric_key) = house.get_symmetric_key() {
+            let signing_pubkey = house.signing_pubkey.clone();
+            let invite_uri = house.invite_uri.clone();
+            let invite_code = house.invite_code.clone();
+            
+            let mut house_export = serde_json::json!({
+                "signing_pubkey": signing_pubkey,
+                "symmetric_key_b64": base64::encode(&symmetric_key),
+                "invite_uri": invite_uri,
+            });
+            
+            if let Some(signing_secret) = house.get_signing_secret() {
+                house_export["signing_secret_b64"] = serde_json::Value::String(base64::encode(&signing_secret));
+            }
+            
+            // Include invite_code as fallback if invite_uri is missing
+            if !invite_code.is_empty() {
+                house_export["invite_code"] = serde_json::Value::String(invite_code);
+            }
+            
+            house_data.push(house_export);
+        } else {
+            eprintln!("Warning: House {} has no symmetric key, skipping export", house.id);
+        }
+    }
+
+    let identity = identity_manager.load_identity()
+        .map_err(|e| format!("Failed to load identity: {}", e))?;
+
+    // Get signaling server URL from current account
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    let current_account_id = account_manager.get_current_account_id()
+        .map_err(|e| format!("Failed to get current account: {}", e))?
+        .ok_or_else(|| "No active session".to_string())?;
+    let account_info = account_manager.get_account_info(&current_account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))?
+        .unwrap_or_else(|| AccountInfo {
+            account_id: current_account_id,
+            display_name: String::new(),
+            created_at: String::new(),
+            signaling_server_url: None,
+        });
+    let signaling_server_url = account_info.signaling_server_url;
+
+    #[derive(Serialize)]
+    struct DebugExport {
         version: u8,
         identity: UserIdentity,
+        profile: Option<serde_json::Value>,
+        houses: Vec<serde_json::Value>,
+        signaling_server_url: Option<String>,
     }
-    
-    let export: ExportFormat = serde_json::from_slice(&data)
-        .map_err(|_| "Invalid identity file".to_string())?;
-    
-    if export.version != 1 {
-        return Err("Unsupported identity file version".to_string());
-    }
-    
-    let identity = export.identity;
-    let user_id = identity.user_id.clone();
-    let display_name = identity.display_name.clone();
 
+    let debug_export = DebugExport {
+        version: 1,
+        identity,
+        profile: profile_json,
+        houses: house_data,
+        signaling_server_url,
+    };
+
+    serde_json::to_string_pretty(&debug_export)
+        .map_err(|e| format!("Failed to serialize debug export: {}", e))
+}
+
+#[derive(Serialize)]
+struct ImportResult {
+    identity: UserIdentity,
+    profile_json: Option<serde_json::Value>,
+}
+
+#[tauri::command]
+fn import_identity(data: Vec<u8>) -> Result<ImportResult, String> {
+    // NO GUARD: Bootstrap command - works without session for initial setup
+    
+    // Import .roo format
+    let (identity, profile_json, house_data, signaling_server_url) = IdentityManager::import_roo_format_static(&data)
+        .map_err(|e| format!("Failed to import .roo file: {}", e))?;
+    
     // Create account container if it doesn't exist
     let account_manager = AccountManager::new()
         .map_err(|e| format!("Failed to access account manager: {}", e))?;
 
+    let user_id = identity.user_id.clone();
+    let display_name = identity.display_name.clone();
+
     if !account_manager.account_exists(&user_id) {
         account_manager.create_account(&user_id, &display_name)
             .map_err(|e| format!("Failed to create account: {}", e))?;
+    }
+    
+    // Restore signaling server URL to account info if present in export
+    if let Some(signaling_url) = &signaling_server_url {
+        let mut account_info = account_manager.get_account_info(&user_id)
+            .map_err(|e| format!("Failed to get account info: {}", e))?
+            .unwrap_or_else(|| AccountInfo {
+                account_id: user_id.clone(),
+                display_name: display_name.clone(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                signaling_server_url: None,
+            });
+        account_info.signaling_server_url = signaling_server_url.clone();
+        account_manager.save_account_info(&account_info)
+            .map_err(|e| format!("Failed to save account info: {}", e))?;
     }
 
     // Set session explicitly (bootstrap behavior)
     account_manager.set_session(&user_id)
         .map_err(|e| format!("Failed to set session: {}", e))?;
 
-    // Save identity to account directory
-    let manager = IdentityManager::for_account(&user_id)
+    // Save identity with this device's key
+    let identity_manager = IdentityManager::for_account(&user_id)
         .map_err(|e| format!("Failed to initialize identity manager: {}", e))?;
-    manager.save_identity(&identity)
+    identity_manager.save_identity(&identity)
         .map_err(|e| format!("Failed to save identity: {}", e))?;
 
-    Ok(identity)
+    // Restore houses from exported data
+    // IMPORTANT: HouseManager must be created AFTER session is set to use correct account directory
+    let house_count = house_data.len();
+    if !house_data.is_empty() {
+        // Verify session is set before creating HouseManager
+        let current_session = account_manager.get_session()
+            .map_err(|e| format!("Failed to verify session: {}", e))?;
+        if current_session.current_account_id.as_ref() != Some(&user_id) {
+            return Err(format!("Session mismatch: expected {}, got {:?}", 
+                user_id, current_session.current_account_id));
+        }
+        
+        let house_manager = HouseManager::new()
+            .map_err(|e| format!("Failed to initialize house manager: {}", e))?;
+        
+        for house_json in house_data {
+            // Get essential keys from export (rooms/members will come from signaling server)
+            let signing_pubkey: String = house_json.get("signing_pubkey")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing signing_pubkey in export".to_string())?
+                .to_string();
+            
+            let symmetric_key_b64: String = house_json.get("symmetric_key_b64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Missing symmetric_key_b64 for house {}", signing_pubkey))?
+                .to_string();
+            let symmetric_key = base64::decode(&symmetric_key_b64)
+                .map_err(|e| format!("Invalid symmetric_key_b64: {}", e))?;
+            
+            let signing_secret_b64: Option<String> = house_json.get("signing_secret_b64")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let signing_secret = signing_secret_b64.and_then(|b64| base64::decode(&b64).ok());
+            
+            let invite_uri: String = house_json.get("invite_uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            
+            let invite_code: String = house_json.get("invite_code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            
+            // Check if house with this signing_pubkey already exists
+            match house_manager.find_house_id_by_signing_pubkey(&signing_pubkey)
+                .map_err(|e| format!("Failed to check for existing house: {}", e))? {
+                Some(_existing_id) => {
+                    // House already exists locally - skip import
+                    // The existing house already has the keys (encrypted with this device's key)
+                    // No need to recreate or update anything
+                    eprintln!("House with signing_pubkey {} already exists locally, skipping import", signing_pubkey);
+                    continue;
+                }
+                None => {
+                    // House doesn't exist - create it with minimal data
+                    use uuid::Uuid;
+                    let house_id = Uuid::new_v4().to_string();
+                    
+                    // Create minimal house JSON - NO default name, let signaling server provide it
+                    let minimal_house_json = serde_json::json!({
+                        "id": house_id,
+                        "signing_pubkey": signing_pubkey,
+                        "invite_uri": invite_uri,
+                        "invite_code": invite_code,
+                    });
+                    
+                    // Restore house using HouseManager method (will encrypt keys with device key)
+                    // Rooms/members will be empty initially - signaling server will populate them
+                    house_manager.restore_house_from_export(&minimal_house_json, symmetric_key, signing_secret)
+                        .map_err(|e| format!("Failed to restore house {}: {}", signing_pubkey, e))?;
+                }
+            }
+        }
+        
+        // Verify houses were restored
+        let restored_houses = house_manager.load_all_houses()
+            .map_err(|e| format!("Failed to verify restored houses: {}", e))?;
+        if restored_houses.len() != house_count {
+            return Err(format!("House restoration incomplete: expected {} houses, got {}", 
+                house_count, restored_houses.len()));
+        }
+    }
+    
+    // Return identity and profile data so frontend can restore profile to localStorage
+    Ok(ImportResult {
+        identity,
+        profile_json,
+    })
 }
 
 #[tauri::command]
@@ -767,49 +1088,76 @@ fn get_default_signaling_server() -> String {
 }
 
 #[tauri::command]
-async fn get_signaling_server_url(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let config_dir = app_handle.path_resolver().app_config_dir()
-        .ok_or_else(|| "Could not determine config directory".to_string())?;
-
-    let config_file = config_dir.join("signaling.json");
-
-    if !config_file.exists() {
-        // Return default if no custom URL is saved
-        return Ok(get_default_signaling_url());
-    }
-
-    let content = std::fs::read_to_string(config_file)
-        .map_err(|e| format!("Failed to read signaling config: {}", e))?;
-
-    let config: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse signaling config: {}", e))?;
-
-    Ok(config.get("url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&get_default_signaling_url())
-        .to_string())
+async fn get_signaling_server_url() -> Result<String, String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    let current_account_id = account_manager.get_current_account_id()
+        .map_err(|e| format!("Failed to get current account: {}", e))?
+        .ok_or_else(|| "No active session".to_string())?;
+    
+    let account_info = account_manager.get_account_info(&current_account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))?
+        .unwrap_or_else(|| AccountInfo {
+            account_id: current_account_id,
+            display_name: String::new(),
+            created_at: String::new(),
+            signaling_server_url: None,
+        });
+    
+    Ok(account_info.signaling_server_url
+        .unwrap_or_else(|| get_default_signaling_url()))
 }
 
 #[tauri::command]
-async fn set_signaling_server_url(app_handle: tauri::AppHandle, url: String) -> Result<(), String> {
-    let config_dir = app_handle.path_resolver().app_config_dir()
-        .ok_or_else(|| "Could not determine config directory".to_string())?;
-
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
-    let config_file = config_dir.join("signaling.json");
-
-    let config = serde_json::json!({
-        "url": url.trim()
-    });
-
-    std::fs::write(config_file, serde_json::to_string_pretty(&config).unwrap())
-        .map_err(|e| format!("Failed to write signaling config: {}", e))?;
-
+async fn set_signaling_server_url(url: String) -> Result<(), String> {
+    // GUARDED: Requires active session
+    require_session()?;
+    
+    let account_manager = AccountManager::new()
+        .map_err(|e| format!("Failed to access account manager: {}", e))?;
+    let current_account_id = account_manager.get_current_account_id()
+        .map_err(|e| format!("Failed to get current account: {}", e))?
+        .ok_or_else(|| "No active session".to_string())?;
+    
+    let mut account_info = account_manager.get_account_info(&current_account_id)
+        .map_err(|e| format!("Failed to get account info: {}", e))?
+        .unwrap_or_else(|| AccountInfo {
+            account_id: current_account_id.clone(),
+            display_name: String::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            signaling_server_url: None,
+        });
+    
+    // Only save if different from default (to avoid cluttering account info)
+    let trimmed_url = url.trim().to_string();
+    if trimmed_url == get_default_signaling_url() {
+        account_info.signaling_server_url = None;
+    } else {
+        account_info.signaling_server_url = Some(trimmed_url);
+    }
+    
+    account_manager.save_account_info(&account_info)
+        .map_err(|e| format!("Failed to save account info: {}", e))?;
+    
     Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn register_roo_file_association_command() -> Result<(), String> {
+    #[cfg(all(windows, feature = "windows-registry"))]
+    {
+        use file_association::register_roo_file_association;
+        register_roo_file_association()
+            .map_err(|e| format!("Failed to register .roo file association: {}", e))
+    }
+    #[cfg(not(all(windows, feature = "windows-registry")))]
+    {
+        Err("File association registration is only supported on Windows with windows-registry feature".to_string())
+    }
 }
 
 // === Account Management Commands ===
@@ -868,6 +1216,15 @@ fn get_current_account_id() -> Result<Option<String>, String> {
         .map_err(|e| format!("Failed to get current account: {}", e))
 }
 
+#[tauri::command]
+fn delete_account(account_id: String) -> Result<(), String> {
+    // NO GUARD: Can delete any account (user must be on account select screen)
+    let manager = AccountManager::new()
+        .map_err(|e| format!("Failed to create account manager: {}", e))?;
+    manager.delete_account(&account_id)
+        .map_err(|e| format!("Failed to delete account: {}", e))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -877,6 +1234,10 @@ fn main() {
             create_identity,
             load_identity,
             export_identity,
+            export_identity_for_account,
+            export_full_identity,
+            export_full_identity_for_account,
+            export_full_identity_debug,
             import_identity,
             // Account management commands
             list_accounts,
@@ -885,6 +1246,8 @@ fn main() {
             switch_account,
             logout_account,
             get_current_account_id,
+            delete_account,
+            register_roo_file_association_command,
             // Audio settings commands
             load_audio_settings,
             save_audio_settings,

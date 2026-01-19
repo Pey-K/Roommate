@@ -6,7 +6,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev --features windows-registry",
+    "tauri:build": "tauri build --features windows-registry",
+    "generate-roo-icon": "node generate-roo-icon.js"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.8",
@@ -27,7 +30,9 @@
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.32",
+    "sharp": "^0.34.5",
     "tailwindcss": "^3.3.6",
+    "to-ico": "^1.1.5",
     "typescript": "^5.3.3",
     "vite": "^7.3.0"
   }

@@ -4,6 +4,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
+use chacha20poly1305::XChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
@@ -422,6 +423,145 @@ impl IdentityManager {
         self.save_identity(&identity)?;
         
         Ok(identity)
+    }
+
+    /// Export full identity with profile and house keys in binary .roo format
+    pub fn export_full_identity(
+        &self,
+        profile_data: Option<serde_json::Value>,
+        house_keys: Vec<serde_json::Value>,
+        signaling_server_url: Option<String>,
+    ) -> Result<Vec<u8>, IdentityError> {
+        let identity = self.load_identity()?;
+
+        // Build the full export payload
+        #[derive(Serialize)]
+        struct FullExportFormat {
+            version: u8,
+            identity: UserIdentity,
+            profile: Option<serde_json::Value>,
+            houses: Vec<serde_json::Value>,
+            signaling_server_url: Option<String>,
+        }
+
+        let export = FullExportFormat {
+            version: 1,
+            identity,
+            profile: profile_data,
+            houses: house_keys,
+            signaling_server_url,
+        };
+
+        // Serialize to JSON
+        let json_bytes = serde_json::to_vec(&export)?;
+
+        // Encrypt with device key (same as stored identity encryption)
+        let device_key = Self::get_device_key()?;
+        let salt: [u8; 16] = rand::random();
+        let key = Self::derive_key_from_device(&device_key, &salt)?;
+
+        let cipher = XChaCha20Poly1305::new((&key).into());
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, json_bytes.as_ref())
+            .map_err(|_| IdentityError::Encryption("Failed to encrypt export payload".to_string()))?;
+
+        // Build binary format
+        // Magic: "RMMT" (4 bytes)
+        // Version: u16 (2 bytes)
+        // Flags: u16 (2 bytes, reserved, set to 0)
+        // Payload size: u32 (4 bytes)
+        // Header checksum: u32 (4 bytes, CRC32 of first 12 bytes)
+        let mut header = Vec::new();
+        header.extend_from_slice(b"RMMT");
+        header.extend_from_slice(&1u16.to_le_bytes()); // version 1
+        header.extend_from_slice(&0u16.to_le_bytes()); // flags (reserved)
+        
+        // Calculate payload size (salt + nonce + ciphertext)
+        let payload = {
+            let mut p = Vec::new();
+            p.extend_from_slice(&salt); // 16 bytes
+            p.extend_from_slice(nonce.as_slice()); // 24 bytes
+            p.extend_from_slice(&ciphertext);
+            p
+        };
+        
+        header.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        
+        // Simple checksum: sum of first 12 bytes as u32
+        let mut checksum: u32 = 0;
+        for &b in &header[..12] {
+            checksum = checksum.wrapping_add(b as u32);
+        }
+        header.extend_from_slice(&checksum.to_le_bytes());
+
+        // Combine header + payload
+        let mut result = header;
+        result.extend(payload);
+        
+        Ok(result)
+    }
+
+    /// Decrypt and parse .roo format (static, doesn't save - caller must save)
+    pub fn import_roo_format_static(data: &[u8]) -> Result<(UserIdentity, Option<serde_json::Value>, Vec<serde_json::Value>, Option<String>), IdentityError> {
+        if data.len() < 16 {
+            return Err(IdentityError::InvalidIdentity);
+        }
+
+        // Parse header
+        let version = u16::from_le_bytes([data[4], data[5]]);
+        if version != 1 {
+            return Err(IdentityError::InvalidIdentity);
+        }
+
+        let payload_size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        
+        if data.len() < 16 + payload_size {
+            return Err(IdentityError::InvalidIdentity);
+        }
+
+        let payload = &data[16..16 + payload_size];
+        
+        if payload.len() < 40 { // salt (16) + nonce (24) minimum
+            return Err(IdentityError::InvalidIdentity);
+        }
+
+        // Extract salt and nonce
+        let salt: [u8; 16] = payload[0..16].try_into()
+            .map_err(|_| IdentityError::Decryption("Invalid salt in .roo file".to_string()))?;
+        let nonce_bytes: [u8; 24] = payload[16..40].try_into()
+            .map_err(|_| IdentityError::Decryption("Invalid nonce in .roo file".to_string()))?;
+        let ciphertext = &payload[40..];
+
+        // Decrypt with device key
+        let device_key = Self::get_device_key()?;
+        let key = Self::derive_key_from_device(&device_key, &salt)?;
+
+        let cipher = XChaCha20Poly1305::new((&key).into());
+        let nonce: [u8; 24] = nonce_bytes;
+        let nonce = nonce.into();
+        let plaintext = cipher.decrypt(&nonce, ciphertext)
+            .map_err(|_| IdentityError::Decryption("Failed to decrypt .roo file".to_string()))?;
+
+        // Deserialize JSON payload
+        #[derive(Deserialize)]
+        struct FullExportFormat {
+            version: u8,
+            identity: UserIdentity,
+            profile: Option<serde_json::Value>,
+            houses: Vec<serde_json::Value>,
+            #[serde(default)]
+            signaling_server_url: Option<String>,
+        }
+
+        let export: FullExportFormat = serde_json::from_slice(&plaintext)
+            .map_err(|_| IdentityError::InvalidIdentity)?;
+
+        if export.version != 1 {
+            return Err(IdentityError::InvalidIdentity);
+        }
+
+        // Don't save here - caller (import_identity_auto) will save after account setup
+        Ok((export.identity, export.profile, export.houses, export.signaling_server_url))
     }
 
 }

@@ -37,6 +37,8 @@ pub struct AccountInfo {
     pub account_id: String,
     pub display_name: String,
     pub created_at: String,
+    #[serde(default)]
+    pub signaling_server_url: Option<String>,
 }
 
 /// Manages account containers and session state
@@ -231,6 +233,7 @@ impl AccountManager {
             account_id: account_id.to_string(),
             display_name: display_name.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            signaling_server_url: None,
         };
         self.save_account_info(&info)?;
 
@@ -241,6 +244,30 @@ impl AccountManager {
     pub fn account_exists(&self, account_id: &str) -> bool {
         let keys_path = self.get_account_dir(account_id).join("keys.dat");
         keys_path.exists()
+    }
+
+    /// Delete an account and all its data
+    /// This permanently removes the account directory
+    pub fn delete_account(&self, account_id: &str) -> Result<(), AccountError> {
+        let account_dir = self.get_account_dir(account_id);
+
+        // Verify account exists
+        if !account_dir.exists() {
+            return Err(AccountError::NotFound(account_id.to_string()));
+        }
+
+        // If this account is the current session, clear the session first
+        let session = self.get_session()?;
+        if session.current_account_id.as_deref() == Some(account_id) {
+            self.clear_session()?;
+        }
+
+        // Remove the entire account directory
+        if account_dir.exists() {
+            fs::remove_dir_all(&account_dir)?;
+        }
+
+        Ok(())
     }
 
     /// Get the base data directory (for use by other modules)

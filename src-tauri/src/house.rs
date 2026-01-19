@@ -572,6 +572,10 @@ impl House {
         self.house_symmetric_key.clone()
     }
 
+    pub fn get_signing_secret(&self) -> Option<Vec<u8>> {
+        self.signing_secret.clone()
+    }
+
     /// Convert to HouseInfo for frontend serialization
     pub fn to_info(&self) -> HouseInfo {
         fn derive_simple_invite_code(signing_pubkey: &str) -> String {
@@ -822,6 +826,135 @@ impl HouseManager {
         Ok(())
     }
 
+    /// Restore a house from exported data (plaintext keys will be encrypted with device key)
+    pub fn restore_house_from_export(
+        &self,
+        house_data: &serde_json::Value,
+        plaintext_symmetric_key: Vec<u8>,
+        plaintext_signing_secret: Option<Vec<u8>>,
+    ) -> Result<(), HouseError> {
+        // Ensure houses directory exists
+        let houses_dir = self.data_dir.join("houses");
+        fs::create_dir_all(&houses_dir)?;
+        use chacha20poly1305::{XChaCha20Poly1305, aead::{Aead, KeyInit}};
+        use rand::rngs::OsRng;
+        
+        // Encrypt symmetric key with device key
+        let encrypted_symmetric_key = {
+            let cipher = XChaCha20Poly1305::new((&self.device_key).into());
+            let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let ciphertext = cipher.encrypt(&nonce, plaintext_symmetric_key.as_ref())
+                .map_err(|_| HouseError::EncryptionFailed)?;
+            let mut result = nonce.to_vec();
+            result.extend(ciphertext);
+            Some(base64::encode(&result))
+        };
+        
+        // Encrypt signing secret if present
+        let encrypted_signing_secret = if let Some(ref secret) = plaintext_signing_secret {
+            let cipher = XChaCha20Poly1305::new((&self.device_key).into());
+            let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let ciphertext = cipher.encrypt(&nonce, secret.as_ref())
+                .map_err(|_| HouseError::EncryptionFailed)?;
+            let mut result = nonce.to_vec();
+            result.extend(ciphertext);
+            Some(base64::encode(&result))
+        } else {
+            None
+        };
+        
+        // Parse house data from export (minimal - rooms/members come from signaling server)
+        let house_id: String = house_data.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .expect("Missing house id in export");
+        
+        // Use empty name - signaling server will provide the real name when syncing
+        // Don't use "Imported House" or any default - let server sync populate it
+        let name: String = house_data.get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| String::new());
+        
+        let created_at: DateTime<Utc> = house_data.get("created_at")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+        
+        // Rooms and members start empty - signaling server will populate them
+        let rooms: Vec<Room> = house_data.get("rooms")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        
+        let members: Vec<HouseMember> = house_data.get("members")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        
+        let signing_pubkey: String = house_data.get("signing_pubkey")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .expect("Missing signing_pubkey in export");
+        
+        let invite_uri: String = house_data.get("invite_uri")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        
+        let connection_mode: ConnectionMode = house_data.get("connection_mode")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or(ConnectionMode::Signaling);
+        
+        let signaling_url: Option<String> = house_data.get("signaling_url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        
+        let invite_code: String = house_data.get("invite_code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        
+        let active_invite_uri: Option<String> = house_data.get("active_invite_uri")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        
+        let active_invite_expires_at: Option<DateTime<Utc>> = house_data.get("active_invite_expires_at")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        
+        let public_key: String = house_data.get("public_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        
+        // Create HouseStorage with encrypted keys
+        let storage = HouseStorage {
+            id: house_id.clone(),
+            name,
+            created_at,
+            rooms,
+            members,
+            signing_pubkey,
+            encrypted_signing_secret,
+            encrypted_symmetric_key,
+            invite_uri,
+            connection_mode,
+            signaling_url,
+            invite_code,
+            active_invite_uri,
+            active_invite_expires_at,
+            public_key,
+        };
+        
+        // Write to disk
+        let house_path = self.get_house_path(&house_id);
+        let json = serde_json::to_string_pretty(&storage)?;
+        fs::write(house_path, json)?;
+        
+        Ok(())
+    }
+
     pub fn load_house(&self, house_id: &str) -> Result<House, HouseError> {
         let house_path = self.get_house_path(house_id);
 
@@ -880,8 +1013,8 @@ impl HouseManager {
         let mut houses = Vec::new();
 
         for house_id in house_ids {
-            // Use readonly loading for listing (faster, no decryption)
-            if let Ok(house) = self.load_house_readonly(&house_id) {
+            // Load with decryption to get full access to keys
+            if let Ok(house) = self.load_house(&house_id) {
                 houses.push(house);
             }
         }
@@ -977,23 +1110,36 @@ impl HouseManager {
     /// NOTE: This intentionally does NOT import any secrets. The encrypted secret fields
     /// are left as None. Key exchange / secret distribution is handled elsewhere.
     pub fn import_house_hint(&self, info: HouseInfo) -> Result<(), HouseError> {
-        let house_path = self.get_house_path(&info.id);
-
-        // If we already have this house locally (e.g. creator), preserve any locally-stored encrypted secrets.
-        let (preserve_encrypted_signing_secret, preserve_encrypted_symmetric_key) = if house_path.exists() {
-            match fs::read_to_string(&house_path)
-                .ok()
-                .and_then(|s| serde_json::from_str::<HouseStorage>(&s).ok())
-            {
-                Some(existing) => (existing.encrypted_signing_secret, existing.encrypted_symmetric_key),
-                None => (None, None),
-            }
-        } else {
-            (None, None)
-        };
+        // Find existing house by signing_pubkey (not by id, since id can differ)
+        // This handles the case where we imported a house with a new UUID, but server provides different UUID
+        let (existing_house_id, preserve_encrypted_signing_secret, preserve_encrypted_symmetric_key) = 
+            match self.find_house_id_by_signing_pubkey(&info.signing_pubkey)? {
+                Some(existing_id) => {
+                    // House exists - preserve its encrypted secrets
+                    let house_path = self.get_house_path(&existing_id);
+                    let (signing_secret, symmetric_key) = if house_path.exists() {
+                        match fs::read_to_string(&house_path)
+                            .ok()
+                            .and_then(|s| serde_json::from_str::<HouseStorage>(&s).ok())
+                        {
+                            Some(existing) => (existing.encrypted_signing_secret, existing.encrypted_symmetric_key),
+                            None => (None, None),
+                        }
+                    } else {
+                        (None, None)
+                    };
+                    (existing_id, signing_secret, symmetric_key)
+                }
+                None => {
+                    // New house - use the id from the server
+                    (info.id.clone(), None, None)
+                }
+            };
+        
+        let house_path = self.get_house_path(&existing_house_id);
 
         let storage = HouseStorage {
-            id: info.id,
+            id: existing_house_id.clone(),
             name: info.name,
             created_at: info.created_at,
             rooms: info.rooms,

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react'
 import { checkSignalingServer, getSignalingServerUrl } from '../lib/tauri'
+import { useAccount } from './AccountContext'
 
 export type SignalingStatus = 'connected' | 'disconnected' | 'checking'
 
@@ -16,6 +17,7 @@ export function SignalingProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SignalingStatus>('checking')
   const [signalingUrl, setSignalingUrl] = useState<string>('')
   const healthCheckInFlightRef = useRef(false)
+  const { currentAccountId } = useAccount()
 
   // Manual/foreground health check: shows "checking" in the UI (used on initial load and when a user explicitly triggers it).
   const checkHealth = useCallback(async () => {
@@ -68,6 +70,13 @@ export function SignalingProvider({ children }: { children: ReactNode }) {
     // Load saved signaling server URL
     reloadUrl()
   }, [reloadUrl])
+
+  // Reload URL when account changes (each account can have its own signaling server)
+  useEffect(() => {
+    if (currentAccountId) {
+      reloadUrl()
+    }
+  }, [currentAccountId, reloadUrl])
 
   useEffect(() => {
     if (!signalingUrl) return

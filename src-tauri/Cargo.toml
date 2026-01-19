@@ -28,6 +28,7 @@ tokio = { version = "1", features = ["net", "time", "rt"] }
 reqwest = { version = "0.11", features = ["json"] }
 urlencoding = "2.1"
 winreg = { version = "0.50", optional = true }
+winapi = { version = "0.3", features = ["winuser", "shellapi"], optional = true }
 
 # Phase 2: Cryptographic house model
 chacha20poly1305 = "0.10"
@@ -38,4 +39,4 @@ base64 = "0.21"
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem
 custom-protocol = ["tauri/custom-protocol"]
-windows-registry = ["winreg"]
+windows-registry = ["winreg", "winapi"]

@@ -59,7 +59,23 @@ function IdentityRestorePage() {
       const data = new Uint8Array(arrayBuffer)
       
       // Import identity (bootstrap command: creates account + sets session)
-      await importIdentity(data)
+      const result = await importIdentity(data)
+      
+      // Restore profile data to localStorage if present
+      if (result.profile_json) {
+        const profileData = result.profile_json
+        const accountId = result.identity.user_id
+        const profileKey = `rmmt:profile:${accountId}`
+        const profile: any = {
+          display_name: profileData.display_name || null,
+          avatar_data_url: profileData.avatar_data_url || null,
+          avatar_rev: 0,
+          real_name: profileData.real_name || null,
+          show_real_name: profileData.show_real_name || false,
+          updated_at: new Date().toISOString(),
+        }
+        localStorage.setItem(profileKey, JSON.stringify(profile))
+      }
       
       // Reload to initialize AccountContext with new session
       window.location.href = '/houses'
@@ -168,13 +184,13 @@ function IdentityRestorePage() {
                     <p className="mb-1 text-sm text-muted-foreground group-hover:text-foreground transition-colors font-light">
                       Click to upload or drag and drop
                     </p>
-                    <p className="text-xs text-muted-foreground/60 font-light">keys.dat file</p>
+                    <p className="text-xs text-muted-foreground/60 font-light">keys.roo file</p>
                   </div>
                   <input
                     id="file-input"
                     type="file"
                     className="hidden"
-                    accept=".dat,application/json"
+                    accept=".roo,application/octet-stream"
                     onChange={handleFileSelect}
                     disabled={isImporting}
                   />

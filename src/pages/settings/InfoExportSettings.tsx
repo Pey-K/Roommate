@@ -2,10 +2,14 @@ import { useState } from 'react'
 import { Download, Loader2, LogOut } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { useAccount } from '../../contexts/AccountContext'
-import { exportIdentity } from '../../lib/tauri'
+import { useProfile } from '../../contexts/ProfileContext'
+import { useIdentity } from '../../contexts/IdentityContext'
+import { exportFullIdentity, exportFullIdentityDebug } from '../../lib/tauri'
 
 export function InfoExportSettings() {
   const { logout } = useAccount()
+  const { profile } = useProfile()
+  const { identity } = useIdentity()
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
@@ -13,19 +17,54 @@ export function InfoExportSettings() {
     logout()
   }
 
+  const sanitizeFilename = (name: string): string => {
+    // Replace invalid filename chars with underscore
+    return name.replace(/[/\\:*?"<>|]/g, '_')
+  }
+
   async function handleExport() {
     setIsExporting(true)
     setExportError(null)
 
     try {
-      const data = await exportIdentity()
+      // Build profile JSON from context (exclude avatar - too large in base64)
+      const profileJson = {
+        display_name: profile.display_name,
+        real_name: profile.real_name,
+        show_real_name: profile.show_real_name,
+      }
+
+      const data = await exportFullIdentity(profileJson)
       
-      // Create a blob and download it
-      const blob = new Blob([data as BlobPart], { type: 'application/json' })
+      // Generate filename: sanitized display_name or fallback to user_id
+      let filename: string
+      if (profile.display_name) {
+        const sanitized = sanitizeFilename(profile.display_name)
+        filename = sanitized || (identity?.user_id.slice(0, 16) ?? 'account')
+      } else if (identity?.user_id) {
+        filename = identity.user_id.slice(0, 16)
+      } else {
+        filename = 'account'
+      }
+      
+      // DEBUG: Export as text file to inspect contents (includes houses)
+      const debugJson = await exportFullIdentityDebug(profileJson)
+      const debugBlob = new Blob([debugJson], { type: 'text/plain' })
+      const debugUrl = URL.createObjectURL(debugBlob)
+      const debugA = document.createElement('a')
+      debugA.href = debugUrl
+      debugA.download = `${filename}.txt`
+      document.body.appendChild(debugA)
+      debugA.click()
+      document.body.removeChild(debugA)
+      URL.revokeObjectURL(debugUrl)
+      
+      // Also export the binary .roo file
+      const blob = new Blob([data as BlobPart], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'roommate-identity.dat'
+      a.download = `${filename}.roo`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)

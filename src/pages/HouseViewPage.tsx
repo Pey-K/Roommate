@@ -15,14 +15,12 @@ function HouseViewPage() {
   const navigate = useNavigate()
   const { identity } = useIdentity()
   const { getLevel } = usePresence()
-  const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers } = useWebRTC()
+  const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers, isInVoice: webrtcIsInVoice, currentRoomId } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
   const [house, setHouse] = useState<House | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [copiedInvite, setCopiedInvite] = useState(false)
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null)
-  const [isInVoice, setIsInVoice] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
   const [showCreateRoomDialog, setShowCreateRoomDialog] = useState(false)
   const [roomName, setRoomName] = useState('')
   const [roomDescription, setRoomDescription] = useState('')
@@ -192,9 +190,13 @@ function HouseViewPage() {
 
   const handleSelectRoom = (room: Room) => {
     if (currentRoom?.id === room.id) return
+
+    // If in voice in a different room, leave first
+    if (webrtcIsInVoice && currentRoomId !== room.id) {
+      leaveVoice()
+    }
+
     setCurrentRoom(room)
-    setIsInVoice(false)
-    setIsMuted(false)
     console.log('Opened room:', room.name)
   }
 
@@ -203,8 +205,6 @@ function HouseViewPage() {
 
     try {
       await joinVoice(currentRoom.id, house.id, identity.user_id)
-      setIsInVoice(true)
-      setIsMuted(false)
       console.log('Joined voice in room:', currentRoom.name)
     } catch (error) {
       console.error('Failed to join voice:', error)
@@ -212,18 +212,12 @@ function HouseViewPage() {
   }
 
   const handleLeaveVoice = () => {
-    if (!currentRoom) return
-
     leaveVoice()
-    setIsInVoice(false)
-    setIsMuted(false)
-    console.log('Left voice in room:', currentRoom.name)
+    console.log('Left voice')
   }
 
   const toggleMute = () => {
     webrtcToggleMute()
-    setIsMuted(isLocalMuted)
-    console.log('Mute toggled:', isLocalMuted)
   }
 
   const handleCreateRoom = async () => {
@@ -266,10 +260,8 @@ function HouseViewPage() {
 
     try {
       // If we're currently in this room's voice channel, disconnect first.
-      if (currentRoom?.id === deleteRoomTarget.id && isInVoice) {
+      if (currentRoom?.id === deleteRoomTarget.id && webrtcIsInVoice) {
         leaveVoice()
-        setIsInVoice(false)
-        setIsMuted(false)
       }
 
       const updatedHouse = await removeRoom(houseId, deleteRoomTarget.id)
@@ -378,7 +370,7 @@ function HouseViewPage() {
                         <span className="text-sm font-light">{room.name}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        {currentRoom?.id === room.id && isInVoice && (
+                        {currentRoomId === room.id && webrtcIsInVoice && (
                           <Volume2 className="h-3 w-3" />
                         )}
                         <button
@@ -469,7 +461,7 @@ function HouseViewPage() {
                       )}
                     </div>
                   </div>
-                  {!isInVoice ? (
+                  {!(webrtcIsInVoice && currentRoomId === currentRoom.id) ? (
                     <Button
                       onClick={handleJoinVoice}
                       variant="default"
@@ -493,8 +485,8 @@ function HouseViewPage() {
                 </div>
               </div>
 
-              {/* Voice Panel (shown when in voice) */}
-              {isInVoice && (
+              {/* Voice Panel (shown when in voice in this room) */}
+              {webrtcIsInVoice && currentRoomId === currentRoom.id && (
                 <div className="border-b-2 border-border bg-accent/30 p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
@@ -505,15 +497,15 @@ function HouseViewPage() {
                           </span>
                         </div>
                         <div>
-                          <p className="text-sm font-light">{identity?.display_name}</p>
+                          <p className="text-sm font-light">{identity?.display_name} (you)</p>
                           <div className="flex items-center gap-1">
-                            {isMuted ? (
+                            {isLocalMuted ? (
                               <MicOff className="h-3 w-3 text-red-500" />
                             ) : (
                               <Mic className="h-3 w-3 text-green-500" />
                             )}
                             <span className="text-xs text-muted-foreground">
-                              {isMuted ? 'Muted' : 'Connected'}
+                              {isLocalMuted ? 'Muted' : 'Unmuted'}
                             </span>
                           </div>
                         </div>
@@ -521,11 +513,11 @@ function HouseViewPage() {
                     </div>
                     <Button
                       onClick={toggleMute}
-                      variant={isMuted ? 'destructive' : 'outline'}
+                      variant={isLocalMuted ? 'destructive' : 'outline'}
                       size="sm"
                       className="h-9 w-9"
                     >
-                      {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                      {isLocalMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                     </Button>
                   </div>
 
@@ -536,9 +528,9 @@ function HouseViewPage() {
                         Connected Peers ({peers.size})
                       </p>
                       {Array.from(peers.entries()).map(([peerId, info]) => {
-                        // Find peer display name from house members
-                        const peerMember = house?.members.find(m => m.user_id === peerId)
-                        const displayName = peerMember?.display_name || peerId.substring(0, 8)
+                        // Find peer display name from house members using userId (stable identity)
+                        const peerMember = house?.members.find(m => m.user_id === info.userId)
+                        const displayName = peerMember?.display_name || `User ${info.userId.slice(0, 8)}`
 
                         return (
                           <div key={peerId} className="flex items-center justify-between">
@@ -551,7 +543,11 @@ function HouseViewPage() {
                               <div>
                                 <p className="text-sm font-light">{displayName}</p>
                                 <span className="text-xs text-muted-foreground">
-                                  {info.connectionState === 'connected' ? 'Connected' : 'Connecting...'}
+                                  {info.connectionState === 'connected' ? 'Connected' : info.connectionState}
+                                </span>
+                                {/* Layer A: Show raw IDs for debugging */}
+                                <span className="text-xs text-muted-foreground font-mono block">
+                                  peer:{info.peerId.slice(0, 6)} user:{info.userId.slice(0, 6)}
                                 </span>
                               </div>
                             </div>
@@ -564,6 +560,10 @@ function HouseViewPage() {
                         )
                       })}
                     </div>
+                  )}
+
+                  {peers.size === 0 && (
+                    <p className="text-sm text-muted-foreground mt-4">No one else in voice</p>
                   )}
                 </div>
               )}
