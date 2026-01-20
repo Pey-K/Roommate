@@ -76,6 +76,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const outputDeviceRef = useRef<string | null>(null)
   const isInVoiceRef = useRef<boolean>(false)            // For reconnect logic
   const peersRef = useRef<Map<string, PeerConnectionInfo>>(new Map())  // For message handlers
+  const isRebuildingAudioRef = useRef<boolean>(false)    // Guard against concurrent rebuilds
 
   // Keep peersRef in sync with state
   useEffect(() => {
@@ -243,38 +244,101 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Attach local audio track
+    // Attach local audio track - rebuild audio stack if needed
     let localStream = localStreamRef.current
+    let needsRebuild = false
+
     if (localStream) {
       const audioTracks = localStream.getAudioTracks()
-      console.log(`[WebRTC] Attaching local audio track. Stream has ${audioTracks.length} audio tracks`)
+      console.log(`[WebRTC] Checking local audio track. Stream has ${audioTracks.length} audio tracks`)
       if (audioTracks.length > 0) {
         const track = audioTracks[0]
         console.log(`[WebRTC] Track label: ${track.label}, enabled: ${track.enabled}, muted: ${track.muted}, readyState: ${track.readyState}`)
-
-        // Check if track is dead and needs reinitialization
         if (track.readyState === 'ended') {
-          console.warn('[WebRTC] Local audio track is ended, reinitializing audio...')
-          // Try to get a fresh stream from the meter
-          const meter = inputLevelMeterRef.current
-          if (meter) {
-            const freshStream = meter.getTransmissionStream()
-            if (freshStream) {
-              const freshTracks = freshStream.getAudioTracks()
-              if (freshTracks.length > 0 && freshTracks[0].readyState === 'live') {
-                console.log('[WebRTC] Got fresh stream from meter')
-                localStream = freshStream
-                localStreamRef.current = freshStream
-              } else {
-                console.error('[WebRTC] Fresh stream from meter also has dead tracks')
-              }
+          console.warn('[WebRTC] Local audio track is ended, need to rebuild audio stack')
+          needsRebuild = true
+        }
+      } else {
+        needsRebuild = true
+      }
+    } else {
+      console.error('[WebRTC] No local stream available!')
+      needsRebuild = true
+    }
+
+    if (needsRebuild) {
+      // Guard against concurrent rebuilds (rapid peer joins/reconnects)
+      if (isRebuildingAudioRef.current) {
+        console.log('[WebRTC] Audio rebuild already in progress, waiting...')
+        // Wait for existing rebuild to complete
+        await new Promise<void>(resolve => {
+          const checkInterval = setInterval(() => {
+            if (!isRebuildingAudioRef.current) {
+              clearInterval(checkInterval)
+              resolve()
             }
+          }, 50)
+        })
+        // After waiting, check if the stream is now valid
+        localStream = localStreamRef.current
+        if (localStream) {
+          const tracks = localStream.getAudioTracks()
+          if (tracks.length > 0 && tracks[0].readyState === 'live') {
+            console.log('[WebRTC] Audio stack was rebuilt by another call, using it')
+            needsRebuild = false
           }
         }
       }
+
+      if (needsRebuild) {
+        isRebuildingAudioRef.current = true
+        console.log('[WebRTC] Rebuilding entire audio stack from scratch...')
+        try {
+          // Stop the old meter completely
+          if (inputLevelMeterRef.current) {
+            inputLevelMeterRef.current.stop()
+            inputLevelMeterRef.current = null
+          }
+
+          // Load audio settings and create fresh meter
+          const audioSettings = await loadAudioSettings()
+          const newMeter = new InputLevelMeter()
+          await newMeter.start(
+            audioSettings.input_device_id || null,
+            () => {} // No level callback needed for WebRTC
+          )
+          newMeter.setGain(audioSettings.input_volume)
+          newMeter.setThreshold(audioSettings.input_sensitivity)
+          newMeter.setInputMode(audioSettings.input_mode)
+
+          inputLevelMeterRef.current = newMeter
+
+          // Get fresh stream
+          const freshStream = newMeter.getTransmissionStream()
+          if (freshStream) {
+            const freshTracks = freshStream.getAudioTracks()
+            if (freshTracks.length > 0 && freshTracks[0].readyState === 'live') {
+              console.log('[WebRTC] Audio stack rebuilt successfully, track is live')
+              localStream = freshStream
+              localStreamRef.current = freshStream
+            } else {
+              console.error('[WebRTC] Rebuilt audio stack but track is still not live!')
+            }
+          } else {
+            console.error('[WebRTC] Rebuilt audio stack but no stream available!')
+          }
+        } catch (error) {
+          console.error('[WebRTC] Failed to rebuild audio stack:', error)
+        } finally {
+          isRebuildingAudioRef.current = false
+        }
+      }
+    }
+
+    if (localStream) {
       attachAudioTrack(pc, localStream)
     } else {
-      console.error('[WebRTC] No local stream available when creating peer connection!')
+      console.error('[WebRTC] Cannot attach audio - no valid local stream!')
     }
 
     return pc
@@ -514,14 +578,62 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       setPeers(new Map())
       peersRef.current = new Map()
 
+      // Destroy the audio stack - it will be rebuilt on reconnect
+      // This ensures we don't try to reuse a poisoned AudioContext
+      console.log('[WebRTC] Destroying audio stack for clean reconnect')
+      if (inputLevelMeterRef.current) {
+        inputLevelMeterRef.current.stop()
+        inputLevelMeterRef.current = null
+      }
+      localStreamRef.current = null
+
       // Layer A: Simple reconnect with fixed 2-second delay
       if (isInVoiceRef.current && currentRoomRef.current) {
         console.log('[WebRTC] Attempting reconnect in 2 seconds...')
-        setTimeout(() => {
+        setTimeout(async () => {
           if (isInVoiceRef.current && currentRoomRef.current) {
             // Generate a new peer_id for the reconnect session
             currentPeerIdRef.current = crypto.randomUUID()
             console.log(`[WebRTC] Reconnecting with new peer_id: ${currentPeerIdRef.current}`)
+
+            // Rebuild audio stack before reconnecting (with guard)
+            if (isRebuildingAudioRef.current) {
+              console.log('[WebRTC] Audio rebuild already in progress, waiting...')
+              await new Promise<void>(resolve => {
+                const checkInterval = setInterval(() => {
+                  if (!isRebuildingAudioRef.current) {
+                    clearInterval(checkInterval)
+                    resolve()
+                  }
+                }, 50)
+              })
+            }
+
+            isRebuildingAudioRef.current = true
+            try {
+              console.log('[WebRTC] Rebuilding audio stack for reconnect...')
+              const audioSettings = await loadAudioSettings()
+              const newMeter = new InputLevelMeter()
+              await newMeter.start(
+                audioSettings.input_device_id || null,
+                () => {}
+              )
+              newMeter.setGain(audioSettings.input_volume)
+              newMeter.setThreshold(audioSettings.input_sensitivity)
+              newMeter.setInputMode(audioSettings.input_mode)
+
+              inputLevelMeterRef.current = newMeter
+              const stream = newMeter.getTransmissionStream()
+              if (stream) {
+                localStreamRef.current = stream
+                console.log('[WebRTC] Audio stack rebuilt for reconnect')
+              }
+            } catch (error) {
+              console.error('[WebRTC] Failed to rebuild audio for reconnect:', error)
+            } finally {
+              isRebuildingAudioRef.current = false
+            }
+
             connectToSignaling()
           }
         }, 2000)
@@ -655,7 +767,15 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       wsRef.current = null
     }
 
-    // 4. Clear local stream reference (don't stop tracks - owned by InputLevelMeter)
+    // 4. Destroy the entire audio stack
+    // The audio pipeline (AudioContext → InputLevelMeter → MediaStreamDestination)
+    // can become "poisoned" after disconnect, producing dead tracks even after
+    // requesting new ones. Destroy everything so joinVoice creates a fresh stack.
+    console.log('[WebRTC] Destroying audio stack')
+    if (inputLevelMeterRef.current) {
+      inputLevelMeterRef.current.stop()
+      inputLevelMeterRef.current = null
+    }
     localStreamRef.current = null
 
     // 5. Clear refs
