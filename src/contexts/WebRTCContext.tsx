@@ -1100,9 +1100,12 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     setCurrentRoomId(roomId)
     isInVoiceRef.current = true
 
+    // Ensure we're subscribed to house events (so we receive VoicePeerJoined broadcasts)
+    subscribeToHouse(houseId)
+
     // Connect to signaling
     connectToSignaling()
-  }, [isInVoice, signalingUrl, connectToSignaling])
+  }, [isInVoice, signalingUrl, connectToSignaling, subscribeToHouse])
 
   // Internal leave function that doesn't check isInVoice state
   // NOTE: This is an EXPLICIT leave - tear down both signaling AND media
@@ -1151,25 +1154,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     currentRoomRef.current = null
     currentHouseRef.current = null
 
-    // 7. Clear voice presence for the room we're leaving
-    const leavingRoomId = currentRoomRef.current
-    if (leavingRoomId && currentUserIdRef.current) {
-      setVoicePresence(prev => {
-        const updated = new Map(prev)
-        const roomUsers = updated.get(leavingRoomId)
-        if (roomUsers) {
-          roomUsers.delete(currentUserIdRef.current!)
-          if (roomUsers.size === 0) {
-            updated.delete(leavingRoomId)
-          } else {
-            updated.set(leavingRoomId, roomUsers)
-          }
-        }
-        return updated
-      })
-    }
-
-    // 8. Update state
+    // 7. Update state
     setIsInVoice(false)
     setCurrentRoomId(null)
     setIsLocalMuted(false)

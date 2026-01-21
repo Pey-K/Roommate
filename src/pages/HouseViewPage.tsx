@@ -103,7 +103,8 @@ function HouseViewPage() {
     return () => {
       unsubscribeFromHouse()
     }
-  }, [houseId, subscribeToHouse, unsubscribeFromHouse])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseId])  // Only re-run when houseId changes, not when functions change
 
   const loadHouseData = async () => {
     if (!houseId) return
