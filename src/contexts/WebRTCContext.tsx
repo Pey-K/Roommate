@@ -44,8 +44,6 @@ interface WebRTCContextType {
   // Connection management
   joinVoice(roomId: string, houseId: string, userId: string): Promise<void>
   leaveVoice(): void
-  subscribeToHouse(houseId: string): void  // Subscribe to house-wide events (voice presence, etc.)
-  unsubscribeFromHouse(): void
 
   // Local controls
   toggleMute(): void
@@ -56,9 +54,6 @@ interface WebRTCContextType {
   isLocalMuted: boolean
   peers: Map<string, PeerConnectionInfo>  // Keyed by peerId
   currentRoomId: string | null
-
-  // Voice presence (house-wide)
-  voicePresence: Map<string, Set<string>>  // Map of roomId -> Set of userIds in that room
 
   // Audio system
   inputLevelMeter: InputLevelMeter | null  // Shared meter for audio settings
@@ -79,7 +74,6 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const [peers, setPeers] = useState<Map<string, PeerConnectionInfo>>(new Map())
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null)
   const [inputLevelMeter, setInputLevelMeter] = useState<InputLevelMeter | null>(null)
-  const [voicePresence, setVoicePresence] = useState<Map<string, Set<string>>>(new Map())
 
   // Refs
   const inputLevelMeterRef = useRef<InputLevelMeter | null>(null)
@@ -95,8 +89,6 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const isRebuildingAudioRef = useRef<boolean>(false)    // Guard against concurrent rebuilds
   const keepaliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)  // Signaling keepalive
   const signalingConnectedRef = useRef<boolean>(false)   // Track signaling state separately from media
-  const subscribedHouseRef = useRef<string | null>(null)  // Track house subscription for presence updates
-  const subscriptionPeerIdRef = useRef<string | null>(null)  // Peer ID for house subscription (for broadcasts)
 
   // Keep peersRef in sync with state
   useEffect(() => {
@@ -121,32 +113,22 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
 
     // Load current audio settings
     const audioSettings = await loadAudioSettings()
-    const deviceId = audioSettings.input_device_id || null
-
-    console.log('[Audio] Initializing with device:', deviceId || 'default')
 
     // Create new meter
     const newMeter = new InputLevelMeter()
-    try {
-      await newMeter.start(
-        deviceId,
-        onLevelUpdate
-      )
+    await newMeter.start(
+      audioSettings.input_device_id || null,
+      onLevelUpdate
+    )
 
-      // Apply saved settings
-      newMeter.setGain(audioSettings.input_volume)
-      newMeter.setThreshold(audioSettings.input_sensitivity)
-      newMeter.setInputMode(audioSettings.input_mode)
+    // Apply saved settings
+    newMeter.setGain(audioSettings.input_volume)
+    newMeter.setThreshold(audioSettings.input_sensitivity)
+    newMeter.setInputMode(audioSettings.input_mode)
 
-      inputLevelMeterRef.current = newMeter
-      setInputLevelMeter(newMeter)  // Update state so context consumers get notified
-      console.log('[Audio] Audio meter created and ready')
-    } catch (error) {
-      console.error('[Audio] Failed to initialize audio meter:', error)
-      // Clean up the failed meter
-      newMeter.stop()
-      throw error
-    }
+    inputLevelMeterRef.current = newMeter
+    setInputLevelMeter(newMeter)  // Update state so context consumers get notified
+    console.log('[Audio] Audio meter created and ready')
   }, [])
 
   // Reinitialize audio (DANGEROUS during calls - only use when NOT in voice)
@@ -644,26 +626,6 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
         const { peers: serverPeers, room_id } = msg
         console.log(`[Signal] Registered in room ${room_id}. Existing peers:`, serverPeers.length)
 
-        // Update voice presence: add ourselves and all existing peers to this room
-        setVoicePresence(prev => {
-          const updated = new Map(prev)
-          // Get existing users in this room (don't wipe them out!)
-          const roomUsers = updated.get(room_id) || new Set<string>()
-
-          // Add ourselves
-          if (currentUserIdRef.current) {
-            roomUsers.add(currentUserIdRef.current)
-          }
-
-          // Add all existing peers
-          for (const peerInfo of serverPeers) {
-            roomUsers.add(peerInfo.user_id)
-          }
-
-          updated.set(room_id, roomUsers)
-          return updated
-        })
-
         // Create connections to all existing peers in the room
         for (const peerInfo of serverPeers) {
           const { peer_id: remotePeerId, user_id: remoteUserId } = peerInfo
@@ -712,17 +674,8 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       }
 
       case 'VoicePeerJoined': {
-        const { peer_id: remotePeerId, user_id: remoteUserId, room_id: roomId } = msg
-        console.log(`[Signal] Peer joined room: peer=${remotePeerId} user=${remoteUserId} room=${roomId}`)
-
-        // Update voice presence for this room
-        setVoicePresence(prev => {
-          const updated = new Map(prev)
-          const roomUsers = updated.get(roomId) || new Set()
-          roomUsers.add(remoteUserId)
-          updated.set(roomId, roomUsers)
-          return updated
-        })
+        const { peer_id: remotePeerId } = msg
+        console.log(`[Signal] Peer joined room: peer=${remotePeerId}`)
 
         // Don't clean up existing connections here - let VoiceOffer handle it
         // The new peer will send us an offer, and we'll handle any duplicate
@@ -734,23 +687,8 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       }
 
       case 'VoicePeerLeft': {
-        const { peer_id: remotePeerId, user_id: remoteUserId, room_id: roomId } = msg
-        console.log(`[Signal] Peer left room: peer=${remotePeerId} user=${remoteUserId} room=${roomId}`)
-
-        // Update voice presence for this room
-        setVoicePresence(prev => {
-          const updated = new Map(prev)
-          const roomUsers = updated.get(roomId)
-          if (roomUsers) {
-            roomUsers.delete(remoteUserId)
-            if (roomUsers.size === 0) {
-              updated.delete(roomId)
-            } else {
-              updated.set(roomId, roomUsers)
-            }
-          }
-          return updated
-        })
+        const { peer_id: remotePeerId } = msg
+        console.log(`[Signal] Peer left room: peer=${remotePeerId}`)
 
         handlePeerDisconnect(remotePeerId)
         break
@@ -845,25 +783,6 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
         break
       }
 
-      case 'VoicePresenceSnapshot': {
-        const { house_id, rooms } = msg
-        console.log(`[Signal] Received voice presence snapshot for house ${house_id}:`, rooms)
-
-        // Update voice presence from snapshot
-        setVoicePresence(prev => {
-          const updated = new Map(prev)
-
-          // Add all rooms from snapshot
-          for (const room of rooms) {
-            const userSet = new Set<string>(room.users as string[])
-            updated.set(room.room_id, userSet)
-          }
-
-          return updated
-        })
-        break
-      }
-
       default:
         // Ignore other message types (presence, profile, etc.)
         break
@@ -892,95 +811,6 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       keepaliveIntervalRef.current = null
     }
   }, [])
-
-  // Subscribe to house-wide events (voice presence, etc.) without joining voice
-  const subscribeToHouse = useCallback((houseId: string) => {
-    if (!signalingUrl) {
-      console.error('[House] Cannot subscribe: no signaling URL')
-      return
-    }
-
-    // Check if already subscribed AND connection is still open
-    if (subscribedHouseRef.current === houseId && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      console.log(`[House] Already subscribed to house ${houseId} with active connection`)
-      return
-    }
-
-    console.log(`[House] Subscribing to house ${houseId}`)
-    subscribedHouseRef.current = houseId
-
-    // Generate peer_id for this subscription (reuse if reconnecting to same house)
-    if (!subscriptionPeerIdRef.current) {
-      subscriptionPeerIdRef.current = crypto.randomUUID()
-    }
-    const subPeerId = subscriptionPeerIdRef.current
-
-    // Open WebSocket if not already open (or reuse voice connection)
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.log('[House] Opening new WebSocket connection')
-      const ws = new WebSocket(signalingUrl)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        console.log('[House] Connected to signaling server')
-        signalingConnectedRef.current = true
-        startKeepalive()
-
-        // Query current voice presence (also registers for broadcasts)
-        ws.send(JSON.stringify({
-          type: 'VoicePresenceQuery',
-          house_id: houseId,
-          peer_id: subPeerId
-        }))
-        console.log(`[House] Sent VoicePresenceQuery for house ${houseId} with peer_id ${subPeerId}`)
-      }
-
-      ws.onmessage = (event) => {
-        handleSignalingMessage(event.data)
-      }
-
-      ws.onerror = (error) => {
-        console.error('[House] WebSocket error:', error)
-      }
-
-      ws.onclose = () => {
-        console.log('[House] WebSocket closed')
-        signalingConnectedRef.current = false
-        stopKeepalive()
-        // Clear subscribed house so we can reconnect if needed
-        subscribedHouseRef.current = null
-      }
-    } else {
-      // Connection already open (probably for voice) - just query presence
-      console.log('[House] Reusing existing WebSocket connection')
-      wsRef.current.send(JSON.stringify({
-        type: 'VoicePresenceQuery',
-        house_id: houseId,
-        peer_id: subPeerId
-      }))
-      console.log(`[House] Sent VoicePresenceQuery for house ${houseId} with peer_id ${subPeerId}`)
-    }
-  }, [signalingUrl, handleSignalingMessage, startKeepalive, stopKeepalive])
-
-  const unsubscribeFromHouse = useCallback(() => {
-    if (!subscribedHouseRef.current) {
-      return
-    }
-
-    console.log(`[House] Unsubscribing from house ${subscribedHouseRef.current}`)
-    subscribedHouseRef.current = null
-    subscriptionPeerIdRef.current = null  // Clear subscription peer_id
-
-    // Only close WebSocket if we're not in a voice call
-    if (!isInVoiceRef.current && wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-      stopKeepalive()
-    }
-
-    // Clear voice presence
-    setVoicePresence(new Map())
-  }, [stopKeepalive])
 
   // Connect to signaling server (used for initial connect and reconnect)
   // NOTE: This is CONTROL PLANE only - does not touch media
@@ -1111,12 +941,9 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     setCurrentRoomId(roomId)
     isInVoiceRef.current = true
 
-    // Ensure we're subscribed to house events (so we receive VoicePeerJoined broadcasts)
-    subscribeToHouse(houseId)
-
     // Connect to signaling
     connectToSignaling()
-  }, [isInVoice, signalingUrl, connectToSignaling, subscribeToHouse])
+  }, [isInVoice, signalingUrl, connectToSignaling])
 
   // Internal leave function that doesn't check isInVoice state
   // NOTE: This is an EXPLICIT leave - tear down both signaling AND media
@@ -1186,15 +1013,12 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       value={{
         joinVoice,
         leaveVoice,
-        subscribeToHouse,
-        unsubscribeFromHouse,
         toggleMute,
         setOutputDevice,
         isInVoice,
         isLocalMuted,
         peers,
         currentRoomId,
-        voicePresence,
         inputLevelMeter,
         ensureAudioInitialized,
         reinitializeAudio,

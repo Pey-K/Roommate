@@ -15,7 +15,7 @@ function HouseViewPage() {
   const navigate = useNavigate()
   const { identity } = useIdentity()
   const { getLevel } = usePresence()
-  const { joinVoice, leaveVoice, subscribeToHouse, unsubscribeFromHouse, toggleMute: webrtcToggleMute, isLocalMuted, peers, isInVoice: webrtcIsInVoice, currentRoomId, voicePresence } = useWebRTC()
+  const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers, isInVoice: webrtcIsInVoice, currentRoomId } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
   const [house, setHouse] = useState<House | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -93,18 +93,6 @@ function HouseViewPage() {
       window.dispatchEvent(new CustomEvent('roommate:active-house-changed', { detail: { signing_pubkey: null } }))
     }
   }, [house?.signing_pubkey])
-
-  // Subscribe to house-wide events (voice presence) when viewing the house
-  useEffect(() => {
-    if (houseId) {
-      subscribeToHouse(houseId)
-    }
-
-    return () => {
-      unsubscribeFromHouse()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [houseId])  // Only re-run when houseId changes, not when functions change
 
   const loadHouseData = async () => {
     if (!houseId) return
@@ -401,37 +389,6 @@ function HouseViewPage() {
                         </button>
                       </div>
                     </div>
-
-                    {/* Show users in voice for this room */}
-                    {voicePresence.get(room.id) && voicePresence.get(room.id)!.size > 0 && (
-                      <div className="mt-1 pl-6 flex items-center gap-1 flex-wrap">
-                        {Array.from(voicePresence.get(room.id)!).map(userId => {
-                          const member = house?.members.find(m => m.user_id === userId)
-                          if (!member) return null
-
-                          // Simple initials from display name
-                          const initials = member.display_name.trim().split(/\s+/)
-                            .map(part => part[0])
-                            .slice(0, 2)
-                            .join('')
-                            .toUpperCase() || '?'
-
-                          return (
-                            <div
-                              key={userId}
-                              title={member.display_name}
-                              className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-medium ${
-                                currentRoom?.id === room.id
-                                  ? 'bg-primary-foreground/20 text-primary-foreground'
-                                  : 'bg-accent text-accent-foreground'
-                              }`}
-                            >
-                              {initials}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
