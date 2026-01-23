@@ -8,8 +8,11 @@ import { SpeakingProvider } from './contexts/SpeakingContext'
 import { ProfileProvider } from './contexts/ProfileContext'
 import { RemoteProfilesProvider } from './contexts/RemoteProfilesContext'
 import { WebRTCProvider } from './contexts/WebRTCContext'
+import { HousesProvider } from './contexts/HousesContext'
+import { SidebarWidthProvider, useSidebarWidth } from './contexts/SidebarWidthContext'
 import TitleBar from './components/TitleBar'
 import { HouseSyncBootstrap } from './components/HouseSyncBootstrap'
+import { UserCard } from './components/UserCard'
 import SplashPage from './pages/SplashPage'
 import AccountSelectPage from './pages/AccountSelectPage'
 import IdentitySetupPage from './pages/IdentitySetupPage'
@@ -48,6 +51,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function UserCardWrapper() {
+  const { width } = useSidebarWidth()
+  return (
+    <div className="absolute bottom-0 left-0 z-10" style={{ width: `${width}em` }}>
+      <UserCard />
+    </div>
+  )
+}
+
 function App() {
   return (
     <IdentityProvider>
@@ -59,11 +71,13 @@ function App() {
                 <RemoteProfilesProvider>
                   <ProfileProvider>
                     <WebRTCProvider>
+                      <HousesProvider>
+                        <SidebarWidthProvider>
                   <HouseSyncBootstrap />
-                  <div className="flex flex-col h-screen overflow-hidden border-2 border-foreground/20">
-                    <TitleBar />
-                    <div className="flex-1 overflow-auto min-h-0">
-                      <Router>
+                  <Router>
+                    <div className="flex flex-col h-screen overflow-hidden border-2 border-foreground/20 relative">
+                      <TitleBar />
+                      <div className="flex-1 overflow-auto min-h-0">
                         <Routes>
                           <Route path="/" element={<SplashPage />} />
                           <Route path="/account/select" element={<AccountSelectPage />} />
@@ -94,9 +108,13 @@ function App() {
                             }
                           />
                         </Routes>
-                      </Router>
+                      </div>
+                      {/* Fixed UserCard at bottom left - same size on all pages */}
+                      <UserCardWrapper />
                     </div>
-                  </div>
+                      </Router>
+                        </SidebarWidthProvider>
+                      </HousesProvider>
                     </WebRTCProvider>
                   </ProfileProvider>
                 </RemoteProfilesProvider>

@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, User, Volume2, Info, Wifi } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { SignalingStatus } from '../components/SignalingStatus'
-import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
 import { AccountSettings } from './settings/AccountSettings'
 import { AudioSettingsPage } from './settings/AudioSettings'
 import { InfoExportSettings } from './settings/InfoExportSettings'
@@ -61,7 +60,6 @@ function SettingsPage() {
 
           <div className="flex items-center gap-2">
             <SignalingStatus />
-            <ProfileAvatarChip />
           </div>
         </div>
       </header>

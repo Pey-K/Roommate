@@ -1,29 +1,33 @@
-import { useEffect, useState, type CSSProperties } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useEffect, useState, useRef, type CSSProperties } from 'react'
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom'
 import { ArrowLeft, Settings, Volume2, Copy, Check, Mic, MicOff, PhoneOff, Plus, Trash2, Phone } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { loadHouse, addRoom, removeRoom, type House, type Room, fetchAndImportHouseHintOpaque, publishHouseHintOpaque, createTemporaryInvite, revokeActiveInvite } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
 import { useWebRTC } from '../contexts/WebRTCContext'
 import { SignalingStatus } from '../components/SignalingStatus'
-import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
 import { useSignaling } from '../contexts/SignalingContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useVoicePresence } from '../contexts/VoicePresenceContext'
 import { useSpeaking } from '../contexts/SpeakingContext'
+import { useSidebarWidth } from '../contexts/SidebarWidthContext'
 import { cn } from '../lib/utils'
 
 function HouseViewPage() {
   const { houseId } = useParams<{ houseId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { identity } = useIdentity()
   const { getLevel } = usePresence()
   const voicePresence = useVoicePresence()
   const { isUserSpeaking } = useSpeaking()
   const { joinVoice, leaveVoice, toggleMute: webrtcToggleMute, isLocalMuted, peers, isInVoice: webrtcIsInVoice, currentRoomId } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
-  const [house, setHouse] = useState<House | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const { width, setWidth, resetWidth } = useSidebarWidth()
+  const roomPaneResizeHandleRef = useRef<HTMLDivElement>(null)
+  const [isResizing, setIsResizing] = useState(false)
+  // Try to get house from navigation state first (preloaded from neighborhood page)
+  const [house, setHouse] = useState<House | null>((location.state as { house?: House })?.house || null)
   const [copiedInvite, setCopiedInvite] = useState(false)
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null)
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null)
@@ -72,13 +76,38 @@ function HouseViewPage() {
     return <div className={`${sizeClass} ${cls} ring-2 ring-background`} />
   }
 
+  // Sync with signaling server in background (non-blocking)
+  const syncWithSignalingServer = async () => {
+    if (!house || !houseId) return
+    
+    // Only sync if signaling is connected
+    if (signalingStatus === 'connected' && signalingUrl) {
+      try {
+        const changed = await fetchAndImportHouseHintOpaque(signalingUrl, house.signing_pubkey)
+        if (changed) {
+          // Reload house data if it changed
+          const updatedHouse = await loadHouse(houseId)
+          setHouse(updatedHouse)
+        }
+      } catch (e) {
+        console.warn('[HouseView] Failed to refresh house hint:', e)
+      }
+    }
+  }
+
   useEffect(() => {
     if (!houseId) {
       navigate('/houses')
       return
     }
 
-    loadHouseData()
+    // If we don't have house data from navigation state, load it from disk
+    if (!house) {
+      loadHouseData()
+    } else {
+      // We have house data, but still sync with signaling server in background
+      syncWithSignalingServer()
+    }
 
     // Reload house data when window gains focus (e.g., alt-tabbing between instances)
     const handleFocus = () => {
@@ -89,6 +118,14 @@ function HouseViewPage() {
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
   }, [houseId])
+
+  // Sync with signaling server when house or signaling status changes (background, non-blocking)
+  useEffect(() => {
+    if (house && houseId) {
+      syncWithSignalingServer()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [house?.signing_pubkey, signalingStatus, signalingUrl])
 
   // Presence: mark this house as "active" while the user is viewing it.
   useEffect(() => {
@@ -101,30 +138,54 @@ function HouseViewPage() {
     }
   }, [house?.signing_pubkey])
 
+  // Resize handler for room pane
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize)
+      const newWidthEm = e.clientX / rootFontSize
+      setWidth(newWidthEm)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing, setWidth])
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizing(true)
+  }
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    resetWidth()
+  }
+
   const loadHouseData = async () => {
     if (!houseId) return
 
     try {
       // Load local first for fast UI
-      let loadedHouse = await loadHouse(houseId)
-
-      // If signaling is connected, pull latest hint to refresh metadata (members/rooms) across accounts.
-      // This uses a merge-import on the backend that preserves local encrypted secrets.
-      if (signalingStatus === 'connected' && signalingUrl) {
-        try {
-          const changed = await fetchAndImportHouseHintOpaque(signalingUrl, loadedHouse.signing_pubkey)
-          if (changed) loadedHouse = await loadHouse(houseId)
-        } catch (e) {
-          console.warn('[HouseView] Failed to refresh house hint:', e)
-        }
-      }
-
+      const loadedHouse = await loadHouse(houseId)
       setHouse(loadedHouse)
+
+      // Sync with signaling server in background (non-blocking)
+      syncWithSignalingServer()
     } catch (error) {
       console.error('Failed to load house:', error)
       navigate('/houses')
-    } finally {
-      setIsLoading(false)
     }
   }
 
@@ -292,14 +353,6 @@ function HouseViewPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="h-full bg-background grid-pattern flex items-center justify-center">
-        <p className="text-muted-foreground text-sm font-light">Loading house...</p>
-      </div>
-    )
-  }
-
   if (!house) {
     return (
       <div className="h-full bg-background grid-pattern flex items-center justify-center">
@@ -311,32 +364,36 @@ function HouseViewPage() {
   return (
     <div className="h-full bg-background grid-pattern flex flex-col">
       <header className="border-b-2 border-border">
-        <div className="w-full flex h-16 items-center justify-between px-6">
-          <div className="flex items-center gap-4">
+        <div className="w-full flex h-16 items-center justify-between px-6 min-w-0">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
             <button
               onClick={() => navigate('/houses')}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
-            <div className="w-px h-6 bg-foreground/20"></div>
-            <h1 className="text-sm font-light tracking-wider uppercase">{house.name}</h1>
+            <div className="w-px h-6 bg-foreground/20 shrink-0"></div>
+            <h1 className="text-sm font-light tracking-wider uppercase truncate min-w-0">{house.name}</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <SignalingStatus />
-            <ProfileAvatarChip />
-            <Link to="/settings">
-              <Button variant="ghost" size="icon" className="h-9 w-9">
-                <Settings className="h-4 w-4" />
-              </Button>
-            </Link>
           </div>
         </div>
       </header>
 
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar - Rooms List */}
-        <div className="w-64 border-r-2 border-border bg-card/50 flex flex-col">
+        <div className="shrink-0 border-r-2 border-border bg-card/50 flex flex-col relative" style={{ width: `${width}em` }}>
+          {/* Resize handle */}
+          <div
+            ref={roomPaneResizeHandleRef}
+            onMouseDown={handleResizeStart}
+            onDoubleClick={handleDoubleClick}
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-10"
+            title="Drag to resize, double-click to reset"
+          >
+            <div className="absolute inset-0 -right-1 w-2" />
+          </div>
           <div className="p-4 flex flex-col h-full">
             <div className="space-y-2">
               <div className="flex items-center justify-between px-2">
@@ -374,23 +431,27 @@ function HouseViewPage() {
                         onMouseLeave={() => setHoveredRoomId(null)}
                         role="button"
                         tabIndex={0}
-                        className={`w-full px-3 py-2 rounded-md transition-colors text-left group ${
+                        className={`w-full px-3 py-2 rounded-md transition-colors text-left group min-w-0 overflow-hidden ${
                           isSelected
                             ? 'bg-primary text-primary-foreground'
                             : 'hover:bg-accent/50'
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">#</span>
-                            <span className="text-sm font-light">{room.name}</span>
+                        <div className="flex items-center justify-between min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="text-lg shrink-0">#</span>
+                            <span className="text-sm font-light truncate">{room.name}</span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {/* Phone icon for joining/leaving voice - visible when in call, hover-only otherwise */}
-                            {(() => {
-                              const inThisRoom = webrtcIsInVoice && currentRoomId === room.id
-                              const showJoin = !inThisRoom && hoveredRoomId === room.id
-                              return (
+                          {(() => {
+                            const inThisRoom = webrtcIsInVoice && currentRoomId === room.id
+                            const showJoin = !inThisRoom && hoveredRoomId === room.id
+                            const isHovered = hoveredRoomId === room.id
+                            const showIcons = inThisRoom || showJoin || isHovered
+                            return (
+                              <div className={`flex items-center gap-2 transition-all duration-200 ${
+                                showIcons ? 'w-auto' : 'w-0 overflow-hidden'
+                              }`}>
+                                {/* Phone icon for joining/leaving voice - visible when in call, hover-only otherwise */}
                                 <button
                                   type="button"
                                   title={inThisRoom ? "Leave voice" : "Join voice"}
@@ -402,29 +463,29 @@ function HouseViewPage() {
                                       handleJoinVoice(room)
                                     }
                                   }}
-                                  className={`p-1 rounded transition-colors ${
+                                  className={`p-1 rounded transition-colors shrink-0 ${
                                     isSelected
                                       ? 'hover:bg-primary-foreground/10 text-primary-foreground/80 hover:text-primary-foreground'
                                       : 'hover:bg-accent/70 text-muted-foreground hover:text-foreground'
-                                  } ${inThisRoom || showJoin ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                                  }`}
                                 >
                                   {inThisRoom ? <PhoneOff className="h-3 w-3" /> : <Phone className="h-3 w-3" />}
                                 </button>
-                              )
-                            })()}
-                            <button
-                              type="button"
-                              title="Delete room"
-                              onClick={(e) => handleDeleteRoomClick(e, room)}
-                              className={`p-1 rounded transition-colors ${
-                                isSelected
-                                  ? 'hover:bg-primary-foreground/10 text-primary-foreground/80 hover:text-primary-foreground'
-                                  : 'hover:bg-accent/70 text-muted-foreground hover:text-foreground'
-                              } ${webrtcIsInVoice && currentRoomId === room.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
+                                <button
+                                  type="button"
+                                  title="Delete room"
+                                  onClick={(e) => handleDeleteRoomClick(e, room)}
+                                  className={`p-1 rounded transition-colors shrink-0 ${
+                                    isSelected
+                                      ? 'hover:bg-primary-foreground/10 text-primary-foreground/80 hover:text-primary-foreground'
+                                      : 'hover:bg-destructive/20 text-destructive'
+                                  }`}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                            )
+                          })()}
                         </div>
                       </div>
 
@@ -542,46 +603,6 @@ function HouseViewPage() {
               </div>
             </div>
 
-            <div className="mt-auto pt-4 border-t border-border">
-              {!getActiveInviteUri() ? (
-                <Button
-                  onClick={handleCreateInvite}
-                  size="sm"
-                  className="h-9 font-light w-full"
-                  disabled={isCreatingInvite || signalingStatus !== 'connected' || !signalingUrl}
-                >
-                  {isCreatingInvite ? 'Creating…' : 'Create invite'}
-                </Button>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 px-3 py-2 bg-background border border-border rounded-md">
-                      <code className="text-xs font-mono break-all">{getActiveInviteCode() || ''}</code>
-                    </div>
-                    <Button
-                      onClick={copyInviteCode}
-                      variant="outline"
-                      size="icon"
-                      className="h-9 w-9 shrink-0"
-                    >
-                      {copiedInvite ? (
-                        <Check className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                  <button
-                    onClick={handleRevokeInvite}
-                    className="text-xs text-red-500 underline underline-offset-4 hover:text-red-400 transition-colors"
-                    type="button"
-                    disabled={isRevokingInvite || signalingStatus !== 'connected' || !signalingUrl}
-                  >
-                    {isRevokingInvite ? 'Revoking…' : 'Revoke access'}
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -651,8 +672,8 @@ function HouseViewPage() {
         </div>
 
         {/* Right Sidebar - Members List */}
-        <div className="w-64 border-l-2 border-border bg-card/50">
-          <div className="p-4 space-y-2">
+        <div className="w-64 border-l-2 border-border bg-card/50 flex flex-col">
+          <div className="p-4 space-y-2 flex-1 overflow-y-auto">
             <h2 className="text-xs font-light tracking-wider uppercase text-muted-foreground px-2">
               Members — {house.members.length}
             </h2>
@@ -686,6 +707,52 @@ function HouseViewPage() {
               ))}
             </div>
           </div>
+
+          {/* Invite Section */}
+          <div className="p-4 border-t-2 border-border">
+            <h2 className="text-xs font-light tracking-wider uppercase text-muted-foreground px-2 mb-3">
+              Invite
+            </h2>
+            {!getActiveInviteUri() ? (
+              <Button
+                onClick={handleCreateInvite}
+                size="sm"
+                className="h-9 font-light w-full"
+                disabled={isCreatingInvite || signalingStatus !== 'connected' || !signalingUrl}
+              >
+                {isCreatingInvite ? 'Creating…' : 'Create invite'}
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 px-3 py-2 bg-background border border-border rounded-md">
+                    <code className="text-xs font-mono break-all">{getActiveInviteCode() || ''}</code>
+                  </div>
+                  <Button
+                    onClick={copyInviteCode}
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                  >
+                    {copiedInvite ? (
+                      <Check className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                <Button
+                  onClick={handleRevokeInvite}
+                  variant="outline"
+                  size="sm"
+                  className="h-9 font-light w-full"
+                  disabled={isRevokingInvite}
+                >
+                  {isRevokingInvite ? 'Revoking…' : 'Revoke invite'}
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -702,6 +769,7 @@ function HouseViewPage() {
                   type="text"
                   value={roomName}
                   onChange={(e) => setRoomName(e.target.value)}
+                  maxLength={25}
                   className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm"
                   placeholder="general, voice-chat, etc."
                   autoFocus

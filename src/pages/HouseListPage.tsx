@@ -1,31 +1,28 @@
-import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Settings, Users, Trash2, Star, CornerDownLeft } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Users, Trash2, Star, CornerDownLeft } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useSignaling } from '../contexts/SignalingContext'
 import { SignalingStatus } from '../components/SignalingStatus'
-import { ProfileAvatarChip } from '../components/ProfileAvatarChip'
 import { UserProfileCard } from '../components/UserProfileCard'
-import { listHouses, createHouse, deleteHouse, type House, parseInviteUri, publishHouseHintOpaque, publishHouseHintMemberLeft, redeemTemporaryInvite } from '../lib/tauri'
+import { createHouse, deleteHouse, type House, parseInviteUri, publishHouseHintOpaque, publishHouseHintMemberLeft, redeemTemporaryInvite } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useVoicePresence } from '../contexts/VoicePresenceContext'
 import { useAccount } from '../contexts/AccountContext'
 import { useProfile } from '../contexts/ProfileContext'
 import { useRemoteProfiles } from '../contexts/RemoteProfilesContext'
-import { useWebRTC } from '../contexts/WebRTCContext'
+import { useHouses } from '../contexts/HousesContext'
 
 function HouseListPage() {
   const navigate = useNavigate()
   const { identity } = useIdentity()
   const { currentAccountId } = useAccount()
   const { getLevel } = usePresence()
-  const { peers } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
   const { profile } = useProfile()
   const remoteProfiles = useRemoteProfiles()
-  const [houses, setHouses] = useState<House[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const { houses, refreshHouses } = useHouses()
   const [isCreating, setIsCreating] = useState(false)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<House | null>(null)
@@ -48,19 +45,7 @@ function HouseListPage() {
     return 'Unknown'
   }
 
-  useEffect(() => {
-    loadHouses()
-
-    // If another part of the app syncs houses (e.g. on login), refresh the list.
-    const onHousesUpdated = () => {
-      loadHouses()
-    }
-    window.addEventListener('roommate:houses-updated', onHousesUpdated)
-
-    return () => {
-      window.removeEventListener('roommate:houses-updated', onHousesUpdated)
-    }
-  }, [])
+  // Houses are now managed by HousesContext, no need to load here
 
   useEffect(() => {
     if (showJoinInline) {
@@ -267,16 +252,6 @@ function HouseListPage() {
     )
   }
 
-  const loadHouses = async () => {
-    try {
-      const loadedHouses = await listHouses()
-      setHouses(loadedHouses)
-    } catch (error) {
-      console.error('Failed to load houses:', error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
   const sortedHouses = [...houses].sort((a, b) => {
     const af = favoriteHouseIds.has(a.id) ? 1 : 0
@@ -301,13 +276,13 @@ function HouseListPage() {
         publishHouseHintOpaque(signalingUrl, newHouse.id).catch(e => console.warn('Failed to publish house hint:', e))
       }
 
-      setHouses([...houses, newHouse])
+      await refreshHouses()
       // Let WS-based bootstraps (presence + hint subscriptions) know a new house exists.
       window.dispatchEvent(new Event('roommate:houses-updated'))
       setShowCreateDialog(false)
       setShowCreateInline(false)
       setHouseName('')
-      navigate(`/houses/${newHouse.id}`)
+      navigate(`/houses/${newHouse.id}`, { state: { house: newHouse } })
     } catch (error) {
       console.error('Failed to create house:', error)
     } finally {
@@ -351,16 +326,13 @@ function HouseListPage() {
       if (inviteCode) {
         const updatedHouse = await redeemTemporaryInvite(signalingServer, inviteCode, identity.user_id, identity.display_name)
 
-        setHouses(prev => {
-          const exists = prev.some(h => h.id === updatedHouse.id)
-          return exists ? prev.map(h => (h.id === updatedHouse.id ? updatedHouse : h)) : [...prev, updatedHouse]
-        })
+        await refreshHouses()
         // Let WS-based bootstraps (presence + hint subscriptions) know a new house exists.
         window.dispatchEvent(new Event('roommate:houses-updated'))
         setShowJoinInline(false)
         setInviteCode('')
         setJoinError('')
-        navigate(`/houses/${updatedHouse.id}`)
+        navigate(`/houses/${updatedHouse.id}`, { state: { house: updatedHouse } })
         return
       }
     } catch (error) {
@@ -396,7 +368,7 @@ function HouseListPage() {
 
       // Delete locally last (so the leave broadcast can be encrypted)
       await deleteHouse(houseId)
-      setHouses(prev => prev.filter(h => h.id !== houseId))
+      await refreshHouses()
       setDeleteTarget(null)
       window.dispatchEvent(new Event('roommate:houses-updated'))
     } catch (error) {
@@ -407,13 +379,6 @@ function HouseListPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="h-full bg-background grid-pattern flex items-center justify-center">
-        <p className="text-muted-foreground text-sm font-light">Loading houses...</p>
-      </div>
-    )
-  }
 
   return (
     <div className="h-full bg-background grid-pattern flex flex-col overflow-hidden">
@@ -425,12 +390,6 @@ function HouseListPage() {
           </div>
           <div className="flex items-center gap-2">
             <SignalingStatus />
-            <ProfileAvatarChip />
-            <Link to="/settings">
-              <Button variant="ghost" size="icon" className="h-9 w-9">
-                <Settings className="h-4 w-4" />
-              </Button>
-            </Link>
           </div>
         </div>
       </header>
@@ -536,6 +495,7 @@ function HouseListPage() {
                                 }
                               }}
                               placeholder="House name"
+                              maxLength={40}
                               className="w-full bg-transparent outline-none text-[11px] font-mono tracking-wider text-background placeholder:text-background/60"
                               autoComplete="off"
                               spellCheck={false}
@@ -569,28 +529,28 @@ function HouseListPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="grid gap-4 pb-2">
+                  <div className="grid gap-4 pb-2 min-w-0">
                     {sortedHouses.map((house) => (
                       (() => {
                         const isFav = favoriteHouseIds.has(house.id)
                         const cardBorder = isFav ? 'border-amber-500/70' : 'border-border'
                         return (
-                      <div key={house.id} className="relative group/card">
+                      <div key={house.id} className="relative group/card min-w-0">
                         <div
-                          onClick={() => navigate(`/houses/${house.id}`)}
+                          onClick={() => navigate(`/houses/${house.id}`, { state: { house } })}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault()
-                              navigate(`/houses/${house.id}`)
+                              navigate(`/houses/${house.id}`, { state: { house } })
                             }
                           }}
                           role="button"
                           tabIndex={0}
-                          className={`w-full p-6 border-2 ${cardBorder} bg-card hover:bg-accent/50 transition-colors text-left rounded-lg`}
+                          className={`w-full p-6 border-2 ${cardBorder} bg-card hover:bg-accent/50 transition-colors text-left rounded-lg min-w-0 overflow-hidden`}
                         >
-                          <div className="flex items-center justify-between gap-6">
-                            <div className="space-y-2">
-                              <h3 className="text-lg font-light tracking-tight">{house.name}</h3>
+                          <div className="flex items-center justify-between gap-6 min-w-0">
+                            <div className="space-y-2 min-w-0 flex-1">
+                              <h3 className="text-lg font-light tracking-tight truncate">{house.name}</h3>
                               <div className="flex items-center gap-4 text-xs text-muted-foreground">
                                 <span className="flex items-center gap-1">
                                   <Users className="h-3 w-3" />
@@ -682,6 +642,7 @@ function HouseListPage() {
                   }
                 }}
                 placeholder="My House"
+                maxLength={40}
                 className="w-full px-4 py-2 bg-background border border-border rounded-md text-sm font-light focus:outline-none focus:ring-2 focus:ring-primary"
                 autoFocus
               />
