@@ -61,8 +61,11 @@ export class RemoteAudioAnalyzer {
       clearTimeout(this.intervalId)
       this.intervalId = null
     }
-    this.audioContext.close().catch((error) => {
-      console.warn('[RemoteAudioAnalyzer] Failed to close audio context:', error)
-    })
+    // Check if AudioContext is already closed before attempting to close
+    if (this.audioContext.state !== 'closed') {
+      this.audioContext.close().catch((error) => {
+        console.warn('[RemoteAudioAnalyzer] Failed to close audio context:', error)
+      })
+    }
   }
 }

@@ -63,7 +63,7 @@ interface WebRTCContextType {
   inputLevelMeter: InputLevelMeter | null  // Shared meter for audio settings
   ensureAudioInitialized(onLevelUpdate: (level: number) => void): Promise<void>
   reinitializeAudio(deviceId: string | null, onLevelUpdate: (level: number) => void): Promise<void>
-  hotSwapInputDevice(deviceId: string): Promise<void>
+  hotSwapInputDevice(deviceId: string | null): Promise<void>
   stopAudio(): void
 }
 
@@ -97,6 +97,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
   const keepaliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)  // Signaling keepalive
   const signalingConnectedRef = useRef<boolean>(false)   // Track signaling state separately from media
   const localAudioAnalyzerRef = useRef<RemoteAudioAnalyzer | null>(null)  // For self-speaking detection
+  const cleanedPeersRef = useRef<Set<string>>(new Set())  // Track cleaned peers to prevent double cleanup
 
   // Keep peersRef in sync with state
   useEffect(() => {
@@ -159,7 +160,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       throw new Error('Cannot change audio device during active call')
     }
 
-    console.log('[Audio] Reinitializing audio system with device:', deviceId || 'default')
+    console.log('[Audio] Reinitializing audio system with device:', deviceId || 'OS default')
 
     // Stop existing meter if any
     if (inputLevelMeterRef.current) {
@@ -204,7 +205,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
    *
    * @throws Error if swap fails - safe to retry or fallback to manual rejoin
    */
-  const hotSwapInputDevice = useCallback(async (newDeviceId: string): Promise<void> => {
+  const hotSwapInputDevice = useCallback(async (newDeviceId: string | null): Promise<void> => {
     if (!isInVoiceRef.current) {
       // Not in call - use normal reinitialize path
       await reinitializeAudio(newDeviceId, () => {})
@@ -387,6 +388,13 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
 
   // Complete cleanup of a single peer connection
   const cleanupPeerConnection = useCallback((peerId: string, peerInfo: PeerConnectionInfo) => {
+    // Prevent double cleanup
+    if (cleanedPeersRef.current.has(peerId)) {
+      console.log(`[WebRTC] Peer ${peerId} already cleaned up, skipping`)
+      return
+    }
+    cleanedPeersRef.current.add(peerId)
+
     console.log(`[WebRTC] Cleaning up peer ${peerId} (user ${peerInfo.userId})`)
 
     // Stop audio analyzer
@@ -1050,6 +1058,7 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     })
     setPeers(new Map())
     peersRef.current = new Map()
+    cleanedPeersRef.current.clear()  // Reset cleaned peers tracking
 
     // 4. Close WebSocket (SIGNALING teardown)
     if (wsRef.current) {

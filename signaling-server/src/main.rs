@@ -19,11 +19,13 @@ use sqlx::{PgPool, postgres::PgPoolOptions, Row};
 #[cfg(feature = "redis-backend")]
 use redis::AsyncCommands;
 
-type PeerId = String;
-type HouseId = String;
-type SigningPubkey = String;
-type WebSocketSender = mpsc::UnboundedSender<hyper_tungstenite::tungstenite::Message>;
-type ConnId = String;
+pub mod state;
+
+pub type PeerId = String;
+pub type HouseId = String;
+pub type SigningPubkey = String;
+pub type WebSocketSender = mpsc::UnboundedSender<hyper_tungstenite::tungstenite::Message>;
+pub type ConnId = String;
 
 fn decode_path_segment(seg: &str) -> String {
     match urlencoding::decode(seg) {
@@ -274,10 +276,10 @@ struct VoicePeerInfo {
 
 /// Internal tracking for a voice peer
 #[derive(Debug, Clone)]
-struct VoicePeer {
-    peer_id: PeerId,
-    user_id: String,
-    conn_id: ConnId,  // For cleanup on WebSocket disconnect
+pub struct VoicePeer {
+    pub peer_id: PeerId,
+    pub user_id: String,
+    pub conn_id: ConnId,  // For cleanup on WebSocket disconnect
 }
 
 // ============================================
@@ -286,12 +288,15 @@ struct VoicePeer {
 
 /// House hint - NOT authoritative, just a cache/recovery aid
 /// Any member can overwrite at any time (no creator lock)
+/// 
+/// Trust boundary: Clients MUST treat local state as authoritative even if server state differs.
+/// The server is not the source of truth - this is just a cache/recovery aid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct EncryptedHouseHint {
-    signing_pubkey: String,
-    encrypted_state: String,  // Server cannot decrypt
-    signature: String,        // Signed by member's Ed25519 key
-    last_updated: DateTime<Utc>,
+pub struct EncryptedHouseHint {
+    pub signing_pubkey: String,
+    pub encrypted_state: String,  // Server cannot decrypt
+    pub signature: String,        // Signed by member's Ed25519 key
+    pub last_updated: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,25 +308,25 @@ struct InviteTokenCreateRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct InviteTokenRecord {
-    code: String,
-    signing_pubkey: String,
-    encrypted_payload: String,
-    signature: String,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    max_uses: u32,
-    remaining_uses: u32,
+pub struct InviteTokenRecord {
+    pub code: String,
+    pub signing_pubkey: String,
+    pub encrypted_payload: String,
+    pub signature: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub max_uses: u32,
+    pub remaining_uses: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct HouseEvent {
-    event_id: String,
-    signing_pubkey: String,
-    event_type: String,        // "MemberJoin", "MemberLeave", "NameChange"
-    encrypted_payload: String, // Server cannot decrypt
-    signature: String,         // Signed by member's Ed25519 key
-    timestamp: DateTime<Utc>,
+pub struct HouseEvent {
+    pub event_id: String,
+    pub signing_pubkey: String,
+    pub event_type: String,        // "MemberJoin", "MemberLeave", "NameChange"
+    pub encrypted_payload: String, // Server cannot decrypt
+    pub signature: String,         // Signed by member's Ed25519 key
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,31 +341,35 @@ struct AckRequest {
 
 /// Connection info for each peer
 #[derive(Debug, Clone)]
-struct PeerConnection {
-    peer_id: PeerId,
-    house_id: HouseId,
-    signing_pubkey: Option<SigningPubkey>,
+pub struct PeerConnection {
+    pub peer_id: PeerId,
+    pub house_id: HouseId,
+    pub signing_pubkey: Option<SigningPubkey>,
+    pub conn_id: ConnId,
 }
 
 #[derive(Debug, Clone)]
-struct PresenceConn {
-    user_id: String,
-    signing_pubkeys: HashSet<SigningPubkey>,
+pub struct PresenceConn {
+    pub user_id: String,
+    pub signing_pubkeys: HashSet<SigningPubkey>,
 }
 
 #[derive(Debug, Clone)]
-struct PresenceUser {
-    conns: HashSet<ConnId>,
-    signing_pubkeys: HashSet<SigningPubkey>,
-    active_signing_pubkey: Option<SigningPubkey>,
+/// Presence user tracking across multiple device connections.
+/// Trust boundary: Last connection wins for active_signing_pubkey (multi-device behavior).
+/// This is an intentional UX choice, not a bug - the most recently active device sets the active house.
+pub struct PresenceUser {
+    pub conns: HashSet<ConnId>,
+    pub signing_pubkeys: HashSet<SigningPubkey>,
+    pub active_signing_pubkey: Option<SigningPubkey>,
 }
 
 #[derive(Debug, Clone)]
-struct ProfileRecord {
-    display_name: String,
-    real_name: Option<String>,
-    show_real_name: bool,
-    rev: i64,
+pub struct ProfileRecord {
+    pub display_name: String,
+    pub real_name: Option<String>,
+    pub show_real_name: bool,
+    pub rev: i64,
 }
 
 #[cfg(feature = "postgres")]
@@ -965,22 +974,22 @@ async fn redis_presence_refresh(
 
 const EVENT_RETENTION_DAYS: i64 = 30;
 #[cfg(feature = "redis-backend")]
-const DEFAULT_REDIS_PRESENCE_TTL_SECS: u64 = 120;
+pub const DEFAULT_REDIS_PRESENCE_TTL_SECS: u64 = 120;
 
 /// Shared state across all connections
 struct ServerState {
     // === WebSocket signaling state ===
     /// Map of peer_id -> PeerConnection
     peers: HashMap<PeerId, PeerConnection>,
-    /// Map of house_id -> list of peer_ids in that house
-    houses: HashMap<HouseId, Vec<PeerId>>,
-    /// Map of signing_pubkey -> list of peer_ids subscribed to that house
-    signing_houses: HashMap<SigningPubkey, Vec<PeerId>>,
+    /// Map of house_id -> set of peer_ids in that house
+    houses: HashMap<HouseId, HashSet<PeerId>>,
+    /// Map of signing_pubkey -> set of peer_ids subscribed to that house
+    signing_houses: HashMap<SigningPubkey, HashSet<PeerId>>,
     /// Map of peer_id -> WebSocket sender (for message forwarding)
     peer_senders: HashMap<PeerId, WebSocketSender>,
 
     /// Map of conn_id -> peer_ids registered on that websocket connection (allows correct cleanup)
-    conn_peers: HashMap<ConnId, Vec<PeerId>>,
+    conn_peers: HashMap<ConnId, HashSet<PeerId>>,
 
     // === Voice chat state (room-scoped) ===
     /// Map of (house_id, room_id) -> list of VoicePeers in that room
@@ -1005,10 +1014,12 @@ struct ServerState {
 
     // === Event queue state (REST API) ===
     /// Hints only - clients treat local state as authoritative
+    /// Trust boundary: Clients MUST treat local state as authoritative even if server state differs
     house_hints: HashMap<SigningPubkey, EncryptedHouseHint>,
     /// Temporary invite tokens (short code -> encrypted payload)
     invite_tokens: HashMap<String, InviteTokenRecord>,
     /// Event queue - time-limited, not consensus-based
+    /// Best-effort sync - timestamp collisions possible
     event_queues: HashMap<SigningPubkey, Vec<HouseEvent>>,
     /// Best-effort acks - soft tracking, not hard requirement
     member_acks: HashMap<(SigningPubkey, String), String>, // (signing_pubkey, user_id) -> last_event_id
@@ -1045,6 +1056,7 @@ impl ServerState {
         peer_id: PeerId,
         house_id: HouseId,
         signing_pubkey: Option<SigningPubkey>,
+        conn_id: ConnId,
     ) -> Vec<PeerId> {
         // Add peer connection
         self.peers.insert(
@@ -1053,21 +1065,23 @@ impl ServerState {
                 peer_id: peer_id.clone(),
                 house_id: house_id.clone(),
                 signing_pubkey: signing_pubkey.clone(),
+                conn_id: conn_id.clone(),
             },
         );
 
+        // Track peer_id for this connection (fixes memory leaks when socket dies)
+        self.conn_peers
+            .entry(conn_id)
+            .or_insert_with(HashSet::new)
+            .insert(peer_id.clone());
+
         // Add peer to house
-        let peers_in_house = self.houses.entry(house_id.clone()).or_insert_with(Vec::new);
-        if !peers_in_house.contains(&peer_id) {
-            peers_in_house.push(peer_id.clone());
-        }
+        let peers_in_house = self.houses.entry(house_id.clone()).or_insert_with(HashSet::new);
+        peers_in_house.insert(peer_id.clone());
 
         // If a signing_pubkey was provided, treat this peer as subscribed for house-hint broadcasts
         if let Some(spk) = signing_pubkey {
-            let peers_for_signing = self.signing_houses.entry(spk).or_insert_with(Vec::new);
-            if !peers_for_signing.contains(&peer_id) {
-                peers_for_signing.push(peer_id.clone());
-            }
+            self.signing_houses.entry(spk).or_insert_with(HashSet::new).insert(peer_id.clone());
         }
 
         // Return other peers in the same house
@@ -1082,7 +1096,7 @@ impl ServerState {
         if let Some(conn) = self.peers.remove(peer_id) {
             // Remove from house list
             if let Some(peers_in_house) = self.houses.get_mut(&conn.house_id) {
-                peers_in_house.retain(|p| p != peer_id);
+                peers_in_house.remove(peer_id);
                 if peers_in_house.is_empty() {
                     self.houses.remove(&conn.house_id);
                 }
@@ -1091,7 +1105,7 @@ impl ServerState {
             // Remove from signing house list (if subscribed)
             if let Some(spk) = conn.signing_pubkey {
                 if let Some(peers_for_signing) = self.signing_houses.get_mut(&spk) {
-                    peers_for_signing.retain(|p| p != peer_id);
+                    peers_for_signing.remove(peer_id);
                     if peers_for_signing.is_empty() {
                         self.signing_houses.remove(&spk);
                     }
@@ -1100,6 +1114,19 @@ impl ServerState {
         }
         // Remove WebSocket sender
         self.peer_senders.remove(peer_id);
+    }
+
+    /// Validates that a peer_id belongs to the connection sending the message.
+    /// This enforces connection identity consistency, not authorization.
+    /// 
+    /// Trust boundary: peer_id validation enforces connection identity consistency, NOT authorization.
+    /// Server validates peer_id → conn_id binding but does NOT validate house membership.
+    /// Returns true if the peer_id is registered and belongs to the given conn_id.
+    fn validate_peer_connection(&self, peer_id: &PeerId, conn_id: &ConnId) -> bool {
+        match self.peers.get(peer_id) {
+            Some(peer) => peer.conn_id == *conn_id,
+            None => false,
+        }
     }
 
     fn broadcast_house_hint_updated(&self, signing_pubkey: &SigningPubkey, hint: &EncryptedHouseHint) {
@@ -1646,17 +1673,10 @@ async fn handle_message(
     match msg {
         SignalingMessage::Register { house_id, peer_id, signing_pubkey } => {
             let mut state = state.lock().await;
-            let peers = state.register_peer(peer_id.clone(), house_id.clone(), signing_pubkey);
+            let peers = state.register_peer(peer_id.clone(), house_id.clone(), signing_pubkey, conn_id.clone());
 
             // Store the sender for this peer
             state.peer_senders.insert(peer_id.clone(), sender.clone());
-
-            // Track all peer_ids for this ws connection (fixes leaks when a single ws registers multiple peer_ids).
-            state
-                .conn_peers
-                .entry(conn_id.clone())
-                .or_insert_with(Vec::new)
-                .push(peer_id.clone());
 
             info!("Registered peer {} in house {}", peer_id, house_id);
 
@@ -1679,6 +1699,7 @@ async fn handle_message(
                 let mut st = state.lock().await;
                 // Upsert presence
                 let affected_spks = st.upsert_presence_hello(conn_id, user_id.clone(), signing_pubkeys.clone(), active_signing_pubkey.clone());
+                // LOCK BOUNDARY: Extract data here, unlock before IO
                 #[cfg(feature = "redis-backend")]
                 let redis_client = st.redis.clone();
                 #[cfg(not(feature = "redis-backend"))]
@@ -1699,6 +1720,7 @@ async fn handle_message(
                 (affected_spks, redis_client, redis_ttl, local_snaps)
             };
 
+            // IO operations happen after lock is released
             #[cfg(feature = "redis-backend")]
             if let Some(client) = redis_client.as_ref() {
                 if let Err(e) = redis_presence_hello(client, redis_ttl, &user_id, &signing_pubkeys, &active_signing_pubkey).await {
@@ -1806,6 +1828,7 @@ async fn handle_message(
                     }
                 }
 
+                // LOCK BOUNDARY: Extract data here, unlock before IO
                 #[cfg(feature = "postgres")]
                 let db = st.db.clone();
                 #[cfg(not(feature = "postgres"))]
@@ -1815,6 +1838,7 @@ async fn handle_message(
             };
 
             // Persist the latest profile so offline users can catch up even after restarts.
+            // IO operation happens after lock is released
             #[cfg(feature = "postgres")]
             if let (Some(pool), Some(rec)) = (db_opt, rec_opt.as_ref()) {
                 let _ = upsert_profile_db(&pool, &user_id, rec).await;
@@ -1824,6 +1848,7 @@ async fn handle_message(
         }
         SignalingMessage::ProfileHello { signing_pubkey, user_ids } => {
             // Prefer DB if available; otherwise fall back to in-memory cache.
+            // LOCK BOUNDARY: Extract data here, unlock before IO
             #[cfg(feature = "postgres")]
             let db = { state.lock().await.db.clone() };
 
@@ -1868,6 +1893,14 @@ async fn handle_message(
         SignalingMessage::Offer { from_peer, to_peer, sdp } => {
             info!("Forwarding offer from {} to {}", from_peer, to_peer);
 
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
+
             let state = state.lock().await;
             if let Some(target_sender) = state.peer_senders.get(&to_peer) {
                 let forward_msg = SignalingMessage::Offer {
@@ -1890,6 +1923,14 @@ async fn handle_message(
         SignalingMessage::Answer { from_peer, to_peer, sdp } => {
             info!("Forwarding answer from {} to {}", from_peer, to_peer);
 
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
+
             let state = state.lock().await;
             if let Some(target_sender) = state.peer_senders.get(&to_peer) {
                 let forward_msg = SignalingMessage::Answer {
@@ -1911,6 +1952,14 @@ async fn handle_message(
         }
         SignalingMessage::IceCandidate { from_peer, to_peer, candidate } => {
             info!("Forwarding ICE candidate from {} to {}", from_peer, to_peer);
+
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
 
             let state = state.lock().await;
             if let Some(target_sender) = state.peer_senders.get(&to_peer) {
@@ -1936,6 +1985,14 @@ async fn handle_message(
 
         SignalingMessage::VoiceRegister { house_id, room_id, peer_id, user_id, signing_pubkey } => {
             info!("Voice register: peer={} user={} house={} room={}", peer_id, user_id, house_id, room_id);
+
+            // Validate peer_id belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&peer_id, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", peer_id, conn_id));
+                }
+            }
 
             let peers = {
                 let mut state = state.lock().await;
@@ -1991,6 +2048,14 @@ async fn handle_message(
         SignalingMessage::VoiceUnregister { peer_id, room_id } => {
             info!("Voice unregister: peer={} room={}", peer_id, room_id);
 
+            // Validate peer_id belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&peer_id, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", peer_id, conn_id));
+                }
+            }
+
             // Find the house_id for this peer and unregister
             let removed = {
                 let mut state = state.lock().await;
@@ -2039,6 +2104,14 @@ async fn handle_message(
         SignalingMessage::VoiceOffer { from_peer, from_user, to_peer, room_id, sdp } => {
             info!("Voice offer from {} to {} in room {}", from_peer, to_peer, room_id);
 
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
+
             let state = state.lock().await;
 
             // Find the target peer's sender (they must be in the same room)
@@ -2076,6 +2149,14 @@ async fn handle_message(
         SignalingMessage::VoiceAnswer { from_peer, from_user, to_peer, room_id, sdp } => {
             info!("Voice answer from {} to {} in room {}", from_peer, to_peer, room_id);
 
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
+
             let state = state.lock().await;
 
             // Find the target peer's sender
@@ -2111,6 +2192,14 @@ async fn handle_message(
 
         SignalingMessage::VoiceIceCandidate { from_peer, to_peer, room_id, candidate } => {
             // Don't log every ICE candidate - too noisy
+            // Validate from_peer belongs to this connection
+            {
+                let state = state.lock().await;
+                if !state.validate_peer_connection(&from_peer, conn_id) {
+                    return Err(format!("Invalid peer_id {} for connection {}", from_peer, conn_id));
+                }
+            }
+
             let state = state.lock().await;
 
             // Find the target peer's sender
@@ -2200,8 +2289,10 @@ async fn handle_api_request(
 
             #[cfg(feature = "postgres")]
             {
+                // LOCK BOUNDARY: Extract data here, unlock before IO
                 let db = { state.lock().await.db.clone() };
                 if let Some(pool) = db {
+                    // IO operation happens after lock is released
                     let _ = gc_expired_invites_db(&pool).await;
                     return match (method, maybe_sub) {
                         (Method::POST, Some("redeem")) => {

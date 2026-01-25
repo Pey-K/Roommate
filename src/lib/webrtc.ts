@@ -138,16 +138,14 @@ export function createRemoteAudioElement(stream: MediaStream, deviceId?: string)
 
 /**
  * Close and cleanup a peer connection
+ * 
+ * NOTE: We do NOT stop the tracks here because the local audio track is SHARED
+ * across all peer connections. Stopping it would silence all connections.
+ * The track should only be stopped when completely leaving voice (in leaveVoiceInternal).
  */
 export function closePeerConnection(pc: RTCPeerConnection): void {
-  // Stop all senders
-  pc.getSenders().forEach(sender => {
-    if (sender.track) {
-      sender.track.stop()
-    }
-  })
-
-  // Close the connection
+  // Just close the connection - this removes tracks from the connection
+  // but does NOT stop the underlying MediaStreamTrack
   pc.close()
 }
 

@@ -121,12 +121,12 @@ export function AudioSettingsPage() {
         if (isInVoice) {
           // Hot-swap during call
           console.log('[AudioSettings] Attempting hot-swap during call...')
-          await hotSwapInputDevice(currentDeviceId || 'default')
+          await hotSwapInputDevice(currentDeviceId || null)
           console.log('[AudioSettings] ✓ Hot-swap successful')
         } else {
           // Normal reinit when not in call
           await reinitializeAudio(currentDeviceId, setInputLevel)
-          console.log('[AudioSettings] Audio reinitialized with device:', currentDeviceId || 'default')
+          console.log('[AudioSettings] Audio reinitialized with device:', currentDeviceId || 'OS default')
         }
 
         // Restore monitoring if it was active
