@@ -1986,16 +1986,19 @@ async fn handle_message(
         SignalingMessage::VoiceRegister { house_id, room_id, peer_id, user_id, signing_pubkey } => {
             info!("Voice register: peer={} user={} house={} room={}", peer_id, user_id, house_id, room_id);
 
-            // Validate peer_id belongs to this connection
-            {
-                let state = state.lock().await;
-                if !state.validate_peer_connection(&peer_id, conn_id) {
-                    return Err(format!("Invalid peer_id {} for connection {}", peer_id, conn_id));
-                }
-            }
-
             let peers = {
                 let mut state = state.lock().await;
+
+                // Register peer if not already registered (allows voice-first registration)
+                // If peer exists, validate it belongs to this connection
+                if !state.peers.contains_key(&peer_id) {
+                    state.register_peer(peer_id.clone(), house_id.clone(), Some(signing_pubkey.clone()), conn_id.clone());
+                } else {
+                    // Validate peer_id belongs to this connection if already registered
+                    if !state.validate_peer_connection(&peer_id, conn_id) {
+                        return Err(format!("Invalid peer_id {} for connection {}", peer_id, conn_id));
+                    }
+                }
 
                 // Store the sender for this peer (voice peers need this for Offer/Answer/ICE forwarding)
                 state.peer_senders.insert(peer_id.clone(), sender.clone());
