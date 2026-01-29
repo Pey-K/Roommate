@@ -3,7 +3,8 @@ import { PhoneOff, Settings } from 'lucide-react'
 import { useIdentity } from '../contexts/IdentityContext'
 import { useProfile } from '../contexts/ProfileContext'
 import { useWebRTC } from '../contexts/WebRTCContext'
-import { usePresence } from '../contexts/PresenceContext'
+import { useSignaling } from '../contexts/SignalingContext'
+import { useActiveHouse } from '../contexts/ActiveHouseContext'
 import { useSidebarWidth } from '../contexts/SidebarWidthContext'
 import { useMemo, useRef, useState, useEffect, type CSSProperties } from 'react'
 import { Button } from './ui/button'
@@ -22,11 +23,26 @@ function initials(name: string) {
   return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
+/** Self presence: gray = offline, orange = neighborhood, green = in house, blue = in call */
+type SelfPresence = 'offline' | 'neighborhood' | 'in_house' | 'in_call'
+
+function getSelfPresence(
+  signalingConnected: boolean,
+  activeSigningPubkey: string | null,
+  isInVoice: boolean
+): SelfPresence {
+  if (!signalingConnected) return 'offline'
+  if (isInVoice) return 'in_call'
+  if (activeSigningPubkey != null) return 'in_house'
+  return 'neighborhood'
+}
+
 export function UserCard() {
   const { identity } = useIdentity()
   const { profile } = useProfile()
   const { isInVoice, leaveVoice } = useWebRTC()
-  const { getLevel } = usePresence()
+  const { status: signalingStatus } = useSignaling()
+  const { activeSigningPubkey } = useActiveHouse()
   const { width, setWidth, resetWidth } = useSidebarWidth()
   const resizeHandleRef = useRef<HTMLDivElement>(null)
   const [isResizing, setIsResizing] = useState(false)
@@ -42,32 +58,31 @@ export function UserCard() {
   }, [identity?.user_id])
 
   const displayName = profile.display_name || identity?.display_name || 'Account'
-  const presenceLevel = identity ? getLevel('', identity.user_id, isInVoice) : 'offline'
+  const signalingConnected = signalingStatus === 'connected'
+  const selfPresence = getSelfPresence(signalingConnected, activeSigningPubkey, isInVoice)
 
   const getStatusText = () => {
-    if (isInVoice) return 'In voice'
-    switch (presenceLevel) {
+    switch (selfPresence) {
       case 'offline':
         return 'Offline'
-      case 'online':
-        return 'Online'
-      case 'active':
-        return 'Active'
+      case 'neighborhood':
+        return 'Neighborhood'
+      case 'in_house':
+        return 'In house'
       case 'in_call':
         return 'In voice'
       default:
-        return 'Online'
+        return 'Offline'
     }
   }
 
   const getStatusColor = () => {
-    if (isInVoice) return 'text-blue-500'
-    switch (presenceLevel) {
+    switch (selfPresence) {
       case 'offline':
         return 'text-muted-foreground'
-      case 'online':
+      case 'neighborhood':
         return 'text-orange-500'
-      case 'active':
+      case 'in_house':
         return 'text-green-500'
       case 'in_call':
         return 'text-blue-500'
@@ -133,17 +148,17 @@ export function UserCard() {
               {initials(displayName)}
             </div>
           )}
-          {/* Presence dot */}
+          {/* Presence dot: gray = offline, orange = neighborhood, green = in house, blue = in call */}
           <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 border-background rounded-none bg-background">
             <div
               className={`w-full h-full rounded-none ${
-                isInVoice
-                  ? 'bg-blue-500'
-                  : presenceLevel === 'offline'
-                    ? 'bg-gray-500'
-                    : presenceLevel === 'online'
-                      ? 'bg-orange-500'
-                      : 'bg-green-500'
+                selfPresence === 'offline'
+                  ? 'bg-gray-500'
+                  : selfPresence === 'neighborhood'
+                    ? 'bg-orange-500'
+                    : selfPresence === 'in_house'
+                      ? 'bg-green-500'
+                      : 'bg-blue-500'
               }`}
             />
           </div>

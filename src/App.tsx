@@ -10,6 +10,7 @@ import { RemoteProfilesProvider } from './contexts/RemoteProfilesContext'
 import { WebRTCProvider } from './contexts/WebRTCContext'
 import { HousesProvider } from './contexts/HousesContext'
 import { SidebarWidthProvider, useSidebarWidth } from './contexts/SidebarWidthContext'
+import { ActiveHouseProvider } from './contexts/ActiveHouseContext'
 import TitleBar from './components/TitleBar'
 import { HouseSyncBootstrap } from './components/HouseSyncBootstrap'
 import { UserCard } from './components/UserCard'
@@ -73,8 +74,9 @@ function App() {
                     <WebRTCProvider>
                       <HousesProvider>
                         <SidebarWidthProvider>
-                  <HouseSyncBootstrap />
-                  <Router>
+                          <ActiveHouseProvider>
+                            <HouseSyncBootstrap />
+                            <Router>
                     <div className="flex flex-col h-screen overflow-hidden border-2 border-foreground/20 relative">
                       <TitleBar />
                       <div className="flex-1 overflow-auto min-h-0">
@@ -112,7 +114,8 @@ function App() {
                       {/* Fixed UserCard at bottom left - same size on all pages */}
                       <UserCardWrapper />
                     </div>
-                      </Router>
+                            </Router>
+                          </ActiveHouseProvider>
                         </SidebarWidthProvider>
                       </HousesProvider>
                     </WebRTCProvider>
