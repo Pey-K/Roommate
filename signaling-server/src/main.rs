@@ -619,6 +619,8 @@ async fn handle_request(
     h1 { font-weight: 300; font-size: 1.5rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
     #count { font-size: 3rem; font-variant-numeric: tabular-nums; }
     .muted { font-size: 0.875rem; color: #888; margin-top: 1rem; }
+    .uptime { font-size: 0.875rem; color: #22c55e; margin-top: 0.5rem; }
+    .downtime { font-size: 0.875rem; color: #ef4444; margin-top: 0.25rem; }
   </style>
 </head>
 <body>
@@ -626,8 +628,18 @@ async fn handle_request(
   <p id="count">—</p>
   <p class="muted">concurrent connections</p>
   <p class="muted">(app opens a connection when logged in and connected, or when in voice)</p>
-  <p class="muted">Updates every 3s</p>
+  <p id="uptime" class="uptime">—</p>
+  <p id="downtime" class="downtime">—</p>
+  <p id="sysinfo" class="muted">—</p>
   <script>
+    function formatUptime(secs) {
+      if (secs < 60) return secs + 's';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm';
+      if (secs < 86400) return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+      var d = Math.floor(secs / 86400);
+      var h = Math.floor((secs % 86400) / 3600);
+      return d + 'd ' + h + 'h';
+    }
     function update() {
       fetch(window.location.origin + '/api/status').then(r => {
         if (!r.ok) throw new Error(r.status);
@@ -635,9 +647,16 @@ async fn handle_request(
       }).then(d => {
         document.getElementById('count').textContent = String(d.connections ?? '—');
         document.getElementById('count').style.color = '';
+        document.getElementById('uptime').textContent = 'Uptime: ' + formatUptime(d.uptime_secs || 0);
+        var started = d.started_at_utc ? (function(s) { try { return new Date(s).toLocaleString(); } catch(e) { return s; } })(d.started_at_utc) : '—';
+        document.getElementById('downtime').textContent = 'Last restarted: ' + started;
+        document.getElementById('sysinfo').textContent = 'RAM: ' + (d.memory_mb ?? '—') + ' MB  |  CPU: ' + (d.cpu_percent != null ? d.cpu_percent.toFixed(1) + '%' : '—');
       }).catch(() => {
         document.getElementById('count').textContent = '?';
         document.getElementById('count').style.color = '#888';
+        document.getElementById('uptime').textContent = 'Uptime: —';
+        document.getElementById('downtime').textContent = 'Last restarted: —';
+        document.getElementById('sysinfo').textContent = 'RAM: —  |  CPU: —';
       });
     }
     update();

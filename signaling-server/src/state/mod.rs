@@ -13,6 +13,7 @@ pub use events::EventState;
 pub use backends::BackendState;
 
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use crate::{SigningPubkey, SignalingMessage, ProfileRecord, PeerId, ServerId, WebSocketSender};
 use hyper_tungstenite::tungstenite::Message;
@@ -27,10 +28,15 @@ pub struct AppState {
     pub profiles: Arc<Mutex<ProfileState>>,
     pub events: Arc<Mutex<EventState>>,
     pub backends: Arc<Mutex<BackendState>>,
+    /// When the beacon process started (for uptime / status page).
+    pub started_at: Instant,
+    /// ISO8601 timestamp when the beacon started (for "last restarted" display).
+    pub started_at_utc: String,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let now_utc = chrono::Utc::now();
         Self {
             signaling: Arc::new(Mutex::new(SignalingState::new())),
             voice: Arc::new(Mutex::new(VoiceState::new())),
@@ -38,6 +44,8 @@ impl AppState {
             profiles: Arc::new(Mutex::new(ProfileState::new())),
             events: Arc::new(Mutex::new(EventState::new())),
             backends: Arc::new(Mutex::new(BackendState::new())),
+            started_at: Instant::now(),
+            started_at_utc: now_utc.to_rfc3339(),
         }
     }
 

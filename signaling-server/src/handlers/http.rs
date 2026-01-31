@@ -1,6 +1,7 @@
 use chrono::Utc;
 use hyper::{Body, Method, Request, Response, StatusCode};
 use log::{info, warn};
+use sysinfo::{System, get_current_pid};
 use crate::{
     decode_path_segment, EncryptedServerHint, InviteTokenCreateRequest,
     ServerEvent, AckRequest,
@@ -35,14 +36,32 @@ pub async fn handle_api_request(
     }
 
     match path_parts[2] {
-        // GET /api/status - Live concurrent connection count (for beacon landing page)
+        // GET /api/status - Live stats for beacon landing page (connections, uptime, sysinfo)
         "status" => {
             if method == Method::GET && path_parts.len() == 3 {
                 let connections = {
                     let signaling = state.signaling.lock().await;
                     signaling.conn_peers.len()
                 };
-                let json = format!(r#"{{"connections":{}}}"#, connections);
+                let uptime_secs = state.started_at.elapsed().as_secs();
+                let started_at_utc = state.started_at_utc.clone();
+                let (memory_mb, cpu_percent) = {
+                    let mut sys = System::new_all();
+                    sys.refresh_all();
+                    get_current_pid()
+                        .ok()
+                        .and_then(|pid| sys.process(pid))
+                        .map(|p| (p.memory() / 1024 / 1024, p.cpu_usage()))
+                        .unwrap_or((0, 0.0))
+                };
+                let json = serde_json::json!({
+                    "connections": connections,
+                    "uptime_secs": uptime_secs,
+                    "started_at_utc": started_at_utc,
+                    "memory_mb": memory_mb,
+                    "cpu_percent": cpu_percent
+                })
+                .to_string();
                 return Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/json")
