@@ -58,6 +58,7 @@ pub async fn handle_api_request(
                     "connections": connections,
                     "uptime_secs": uptime_secs,
                     "started_at_utc": started_at_utc,
+                    "downtime_secs": state.downtime_secs,
                     "memory_mb": memory_mb,
                     "cpu_percent": cpu_percent
                 })

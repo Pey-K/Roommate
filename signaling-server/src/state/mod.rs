@@ -30,12 +30,14 @@ pub struct AppState {
     pub backends: Arc<Mutex<BackendState>>,
     /// When the beacon process started (for uptime / status page).
     pub started_at: Instant,
-    /// ISO8601 timestamp when the beacon started (for "last restarted" display).
+    /// ISO8601 timestamp when the beacon started (for status).
     pub started_at_utc: String,
+    /// Duration of previous shutdown in seconds (from last-stop file), if any.
+    pub downtime_secs: Option<u64>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(downtime_secs: Option<u64>) -> Self {
         let now_utc = chrono::Utc::now();
         Self {
             signaling: Arc::new(Mutex::new(SignalingState::new())),
@@ -46,6 +48,7 @@ impl AppState {
             backends: Arc::new(Mutex::new(BackendState::new())),
             started_at: Instant::now(),
             started_at_utc: now_utc.to_rfc3339(),
+            downtime_secs,
         }
     }
 

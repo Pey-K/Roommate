@@ -2,7 +2,10 @@
 #![allow(dead_code, unused_variables)]
 
 use std::collections::HashSet;
+use std::env;
+use std::fs;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -626,8 +629,7 @@ async fn handle_request(
 <body>
   <h1>Cordia Beacon</h1>
   <p id="count">—</p>
-  <p class="muted">concurrent connections</p>
-  <p class="muted">(app opens a connection when logged in and connected, or when in voice)</p>
+  <p class="muted">Connections</p>
   <p id="uptime" class="uptime">—</p>
   <p id="downtime" class="downtime">—</p>
   <p id="sysinfo" class="muted">—</p>
@@ -648,14 +650,13 @@ async fn handle_request(
         document.getElementById('count').textContent = String(d.connections ?? '—');
         document.getElementById('count').style.color = '';
         document.getElementById('uptime').textContent = 'Uptime: ' + formatUptime(d.uptime_secs || 0);
-        var started = d.started_at_utc ? (function(s) { try { return new Date(s).toLocaleString(); } catch(e) { return s; } })(d.started_at_utc) : '—';
-        document.getElementById('downtime').textContent = 'Last restarted: ' + started;
+        document.getElementById('downtime').textContent = d.downtime_secs != null ? 'Downtime: ' + formatUptime(d.downtime_secs) : 'Downtime: —';
         document.getElementById('sysinfo').textContent = 'RAM: ' + (d.memory_mb ?? '—') + ' MB  |  CPU: ' + (d.cpu_percent != null ? d.cpu_percent.toFixed(1) + '%' : '—');
       }).catch(() => {
         document.getElementById('count').textContent = '?';
         document.getElementById('count').style.color = '#888';
         document.getElementById('uptime').textContent = 'Uptime: —';
-        document.getElementById('downtime').textContent = 'Last restarted: —';
+        document.getElementById('downtime').textContent = 'Downtime: —';
         document.getElementById('sysinfo').textContent = 'RAM: —  |  CPU: —';
       });
     }
@@ -689,6 +690,41 @@ async fn handle_request(
 }
 
 // ============================================
+// Last-stop file (for downtime on status page)
+// ============================================
+
+fn last_stop_file_path() -> PathBuf {
+    env::var("SIGNALING_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| env::temp_dir())
+        .join("cordia-beacon-last-stop")
+}
+
+/// Read last-stop timestamp and return previous shutdown duration in seconds (started_at - last_stopped).
+fn read_downtime_secs() -> Option<u64> {
+    let path = last_stop_file_path();
+    let s = fs::read_to_string(&path).ok()?;
+    let stopped = chrono::DateTime::parse_from_rfc3339(s.trim()).ok()?.with_timezone(&Utc);
+    let now = Utc::now();
+    let secs = (now - stopped).num_seconds();
+    if secs < 0 || secs > 7 * 24 * 3600 {
+        return None;
+    }
+    Some(secs as u64)
+}
+
+fn write_last_stop_file() {
+    let path = last_stop_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let s = Utc::now().to_rfc3339();
+    if let Err(e) = fs::write(&path, s) {
+        log::warn!("Failed to write last-stop file: {}", e);
+    }
+}
+
+// ============================================
 // Main Entry Point
 // ============================================
 
@@ -705,8 +741,9 @@ async fn main() {
 
     env_logger::init();
 
+    let downtime_secs = read_downtime_secs();
     let addr: SocketAddr = "0.0.0.0:9001".parse().expect("Invalid address");
-    let state = Arc::new(AppState::new());
+    let state = Arc::new(AppState::new(downtime_secs));
 
     // Optional Postgres durability (profiles first; others later)
     #[cfg(feature = "postgres")]
@@ -845,7 +882,12 @@ async fn main() {
     info!("REST API: http://{}/api/servers/{{signing_pubkey}}/... (server hints)", addr);
     info!("Health check: http://{}/health", addr);
 
-    if let Err(e) = server.await {
+    let graceful = server.with_graceful_shutdown(async {
+        tokio::signal::ctrl_c().await.ok();
+        write_last_stop_file();
+    });
+
+    if let Err(e) = graceful.await {
         error!("Server error: {}", e);
     }
 }
