@@ -606,9 +606,16 @@ async fn handle_request(
   <p class="muted">Updates every 3s</p>
   <script>
     function update() {
-      fetch('/api/status').then(r => r.json()).then(d => {
-        document.getElementById('count').textContent = d.connections ?? '—';
-      }).catch(() => { document.getElementById('count').textContent = '—'; });
+      fetch(window.location.origin + '/api/status').then(r => {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }).then(d => {
+        document.getElementById('count').textContent = String(d.connections ?? '—');
+        document.getElementById('count').style.color = '';
+      }).catch(() => {
+        document.getElementById('count').textContent = '?';
+        document.getElementById('count').style.color = '#888';
+      });
     }
     update();
     setInterval(update, 3000);

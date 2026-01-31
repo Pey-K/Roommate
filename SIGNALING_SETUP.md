@@ -151,6 +151,19 @@ environment:
   - TZ=Your/Timezone
 ```
 
+### Cloudflare Tunnel / Reverse proxy
+
+If you expose the beacon with **Cloudflare Tunnel** (or any reverse proxy):
+
+1. **Forward both HTTP and WebSocket** to the beacon container (port 9001). The beacon serves:
+   - **HTTP**: `GET /` and `GET /api/status` (live connection count page)
+   - **WebSocket**: app connections
+   on the **same port** (9001). The tunnel must proxy **all** traffic to that port, not only WebSocket.
+
+2. If the **live status page** at your beacon URL shows **?** or never updates: the proxy is likely not forwarding HTTP. Configure the tunnel to send `https://your-beacon-domain` (all paths) to `http://localhost:9001` (or your NAS IP and port 9001).
+
+3. **Cloudflare Web Analytics / Insights**: If you see console errors about `static.cloudflareinsights.com/beacon.min.js`, that’s Cloudflare’s script (unrelated to Cordia). You can disable it for the beacon host in the Cloudflare dashboard, or ignore the errors; they don’t affect the Cordia status page.
+
 ## Troubleshooting
 
 ### Port 9001 Already in Use
@@ -175,6 +188,10 @@ lsof -ti:9001 | xargs kill -9
 - Make sure Docker Desktop is running
 - Try `docker ps` to verify Docker is accessible
 - Restart Docker Desktop if needed
+
+### Live status page shows ? or doesn’t update
+
+- The page at `https://your-beacon-domain/` (and `/api/status`) must be served by the Cordia beacon. If you use a reverse proxy or Cloudflare Tunnel, ensure **HTTP** (not only WebSocket) is forwarded to the beacon on port 9001. See **Cloudflare Tunnel / Reverse proxy** above.
 
 ### App Shows "Offline" Status
 
