@@ -23,7 +23,7 @@ function SplashPage() {
       navigate('/account/select')
       } else {
       // No accounts exist - show setup to create first account
-        navigate('/identity/setup')
+        navigate('/account/setup')
     }
   }, [accountsLoading, currentAccountId, identity, accounts, navigate])
 
@@ -33,12 +33,12 @@ function SplashPage() {
         <div className="flex items-center gap-3">
           <div className="w-px h-12 bg-foreground/20"></div>
           <div>
-            <h1 className="text-5xl font-light tracking-tight text-foreground">Roommate</h1>
+            <h1 className="text-5xl font-light tracking-tight text-foreground">Cordia</h1>
             <div className="h-px w-24 bg-foreground/10 mt-2"></div>
           </div>
         </div>
         <p className="text-muted-foreground text-sm font-light tracking-wide uppercase">
-          {accountsLoading ? 'Initializing' : 'Preparing'}
+          {accountsLoading ? 'Loading' : 'Preparing'}
         </p>
       </div>
     </div>

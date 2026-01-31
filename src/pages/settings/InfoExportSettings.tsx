@@ -70,7 +70,7 @@ export function InfoExportSettings() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : 'Failed to export identity')
+      setExportError(err instanceof Error ? err.message : 'Failed to export account')
     } finally {
       setIsExporting(false)
     }
@@ -84,7 +84,7 @@ export function InfoExportSettings() {
           <h2 className="text-lg font-light tracking-tight">Backup & Export</h2>
             <div className="h-px bg-foreground/20 mt-1 w-full"></div>
           </div>
-          <p className="text-xs text-muted-foreground font-light">Export your identity for backup</p>
+          <p className="text-xs text-muted-foreground font-light">Export your account for backup</p>
         </div>
         <div className="space-y-4">
           {exportError && (
@@ -106,12 +106,12 @@ export function InfoExportSettings() {
             ) : (
               <>
                 <Download className="mr-2 h-4 w-4" />
-                Export Identity
+                Export Account
               </>
             )}
           </Button>
           <p className="text-xs text-muted-foreground font-light">
-            Save this file in a secure location. You can import it on another device to restore your identity.
+            Save this file in a secure location. You can import it on another device to restore your account.
           </p>
         </div>
       </div>
@@ -138,7 +138,7 @@ export function InfoExportSettings() {
           Logout
         </Button>
         <p className="text-xs text-muted-foreground font-light">
-          Clears your session and identity from memory. You will need to select your account to log back in.
+          Clears your session and account from memory. You will need to select an account to log back in.
         </p>
       </div>
     </div>

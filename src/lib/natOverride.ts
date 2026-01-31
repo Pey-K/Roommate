@@ -19,6 +19,6 @@ export function setNatOverride(value: NatOverride): void {
     // ignore
   }
   // Same-window notification (storage event doesn't fire in the same tab)
-  window.dispatchEvent(new Event('roommate:nat-override-changed'))
+  window.dispatchEvent(new Event('cordia:nat-override-changed'))
 }
 

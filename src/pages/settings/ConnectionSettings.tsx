@@ -84,8 +84,8 @@ export function ConnectionSettings() {
 
   useEffect(() => {
     const onChanged = () => setNatOverrideState(getNatOverride())
-    window.addEventListener('roommate:nat-override-changed', onChanged)
-    return () => window.removeEventListener('roommate:nat-override-changed', onChanged)
+    window.addEventListener('cordia:nat-override-changed', onChanged)
+    return () => window.removeEventListener('cordia:nat-override-changed', onChanged)
   }, [])
 
   type NatExperience = 'checking' | 'open' | 'moderate' | 'strict'

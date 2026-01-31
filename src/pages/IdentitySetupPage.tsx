@@ -11,7 +11,7 @@ function IdentitySetupPage() {
   const [displayedText, setDisplayedText] = useState('')
   const navigate = useNavigate()
   
-  const fullText = 'Create Your Identity'
+  const fullText = 'Create Your Account'
   
   useEffect(() => {
     let currentIndex = 0
@@ -45,7 +45,7 @@ function IdentitySetupPage() {
       // Reload to initialize AccountContext with new session
       window.location.href = '/home'
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create identity')
+      setError(err instanceof Error ? err.message : 'Failed to create account')
       setIsCreating(false)
     }
   }
@@ -66,7 +66,7 @@ function IdentitySetupPage() {
                 </h1>
               </div>
               <p className="text-muted-foreground text-base leading-relaxed max-w-sm fade-in">
-                <span className="font-semibold text-foreground">Real-time P2P communication,<br /> decentralized and encrypted</span><br /><br />Your identity is stored locally on this device. <br />No passwords, no history, no central servers.
+                <span className="font-semibold text-foreground">Real-time P2P communication,<br /> decentralized and encrypted</span><br /><br />Your account is stored locally on this device. <br />No passwords, no history, no central servers.
               </p>
             </div>
             <div className="space-y-4 text-sm text-muted-foreground font-light">
@@ -142,7 +142,7 @@ function IdentitySetupPage() {
 
               <Button
                 variant="ghost"
-                onClick={() => navigate('/identity/restore')}
+                onClick={() => navigate('/account/restore')}
                 className="w-full h-11 font-light text-muted-foreground hover:text-foreground"
                 disabled={isCreating}
               >

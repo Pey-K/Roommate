@@ -77,7 +77,7 @@ export function AccountSettings() {
           <h2 className="text-lg font-light tracking-tight">Account</h2>
           <div className="h-px bg-foreground/20 mt-1 w-full"></div>
         </div>
-        <p className="text-xs text-muted-foreground font-light">Your identity information</p>
+        <p className="text-xs text-muted-foreground font-light">Your account information</p>
       </div>
       <div className="space-y-6 pt-4">
         <div className="grid grid-cols-1 md:grid-cols-[1.6fr_1fr] gap-8 items-start">

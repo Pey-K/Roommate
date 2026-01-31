@@ -898,11 +898,11 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       // Start keepalive to prevent idle disconnect
       startKeepalive()
 
-      // Register for voice in the room (re-register with same peer_id)
+      // Register for voice in the chat (beacon expects server_id and chat_id)
       const registerMessage = {
         type: 'VoiceRegister',
-        house_id: currentHouseRef.current,
-        room_id: currentRoomRef.current,
+        server_id: currentHouseRef.current,
+        chat_id: currentRoomRef.current,
         peer_id: currentPeerIdRef.current,
         user_id: currentUserIdRef.current,
         signing_pubkey: currentSigningPubkeyRef.current

@@ -86,7 +86,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
           clearIdentity();
           setCurrentAccountId(null);
           setAuthError(
-            'Failed to load identity for the active session. You may need to restore this account from a backup file.'
+            'Failed to load account for the active session. You may need to restore this account from a backup file.'
           );
         }
       }

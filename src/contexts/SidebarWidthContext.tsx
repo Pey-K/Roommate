@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useCallback, type ReactNode } from
 const DEFAULT_WIDTH = 13 // 13em
 const MIN_WIDTH = 10 // 10em (3em thinner)
 const MAX_WIDTH = 16 // 16em (3em thicker)
-const STORAGE_KEY = 'roommate:sidebar-width'
+const STORAGE_KEY = 'cordia:sidebar-width'
 
 type SidebarWidthContextType = {
   width: number // in em

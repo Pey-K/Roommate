@@ -376,14 +376,14 @@ export function ServerSyncBootstrap() {
         // Re-announce presence so other clients see us (fixes gray dot after reconnect; also on settings save)
         sendPresenceHello('profile-updated')
       }
-      window.addEventListener('roommate:profile-updated', onProfileUpdated as any)
+      window.addEventListener('cordia:profile-updated', onProfileUpdated as any)
       window.addEventListener('cordia:active-server-changed', onActiveServerChanged as any)
 
       // Ensure listeners are cleaned up when the WS is replaced.
       const cleanupListeners = () => {
         window.removeEventListener('cordia:server-removed', onServerRemoved)
         window.removeEventListener('cordia:servers-updated', onServersUpdated)
-        window.removeEventListener('roommate:profile-updated', onProfileUpdated as any)
+        window.removeEventListener('cordia:profile-updated', onProfileUpdated as any)
         window.removeEventListener('cordia:active-server-changed', onActiveServerChanged as any)
       }
       ws.addEventListener('close', cleanupListeners, { once: true })

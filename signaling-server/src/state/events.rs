@@ -40,7 +40,7 @@ impl EventState {
 
     pub fn put_invite_token(&mut self, signing_pubkey: &str, req: InviteTokenCreateRequest) -> Result<InviteTokenRecord, String> {
         let code = req.code.trim().to_string();
-        if code.len() < 10 || code.len() > 64 {
+        if code.len() < 6 || code.len() > 64 {
             return Err("Invalid invite code length".to_string());
         }
         let now = Utc::now();

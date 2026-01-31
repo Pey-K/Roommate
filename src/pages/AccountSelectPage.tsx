@@ -17,7 +17,7 @@ function AccountSelectPage() {
   useEffect(() => {
     // If no accounts exist, redirect to setup
     if (!accountsLoading && accounts.length === 0) {
-      navigate('/identity/setup')
+      navigate('/account/setup')
     }
   }, [accountsLoading, accounts, navigate])
 
@@ -34,7 +34,7 @@ function AccountSelectPage() {
   }
 
   const handleCreateNew = () => {
-    navigate('/identity/setup')
+    navigate('/account/setup')
   }
 
   const handleDeleteClick = (accountId: string, e: React.MouseEvent) => {
@@ -86,7 +86,7 @@ function AccountSelectPage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Failed to export identity')
+      setDeleteError(err instanceof Error ? err.message : 'Failed to export account')
     } finally {
       setIsExporting(false)
     }
@@ -106,7 +106,7 @@ function AccountSelectPage() {
       // If no accounts remain, redirect to setup
       const updatedAccounts = accounts.filter(id => id !== deleteTarget)
       if (updatedAccounts.length === 0) {
-        navigate('/identity/setup')
+        navigate('/account/setup')
       }
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete account')

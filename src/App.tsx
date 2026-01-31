@@ -41,11 +41,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/account/select" replace />
   }
 
-  // Session exists but identity hasn't populated yet (should be brief)
+  // Session exists but account data hasn't populated yet (should be brief)
   if (!identity) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground">Loading identity...</p>
+        <p className="text-muted-foreground">Loading account...</p>
       </div>
     )
   }
@@ -85,8 +85,11 @@ function App() {
                         <Routes>
                           <Route path="/" element={<SplashPage />} />
                           <Route path="/account/select" element={<AccountSelectPage />} />
-                          <Route path="/identity/setup" element={<IdentitySetupPage />} />
-                          <Route path="/identity/restore" element={<IdentityRestorePage />} />
+                          <Route path="/account/setup" element={<IdentitySetupPage />} />
+                          <Route path="/account/restore" element={<IdentityRestorePage />} />
+                          {/* Redirect old identity URLs to account URLs */}
+                          <Route path="/identity/setup" element={<Navigate to="/account/setup" replace />} />
+                          <Route path="/identity/restore" element={<Navigate to="/account/restore" replace />} />
                           <Route
                             path="/home"
                             element={

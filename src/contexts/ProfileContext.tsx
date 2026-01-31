@@ -124,7 +124,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const emitProfileUpdated = (next: LocalProfile) => {
     window.dispatchEvent(
-      new CustomEvent('roommate:profile-updated', {
+      new CustomEvent('cordia:profile-updated', {
         detail: {
           display_name: next.display_name,
           real_name: next.real_name,

@@ -11,7 +11,7 @@ function IdentityRestorePage() {
   const [isDragging, setIsDragging] = useState(false)
   const navigate = useNavigate()
   
-  const fullText = 'Restore Your Identity'
+  const fullText = 'Restore Your Account'
   
   useEffect(() => {
     let currentIndex = 0
@@ -80,7 +80,7 @@ function IdentityRestorePage() {
       // Reload to initialize AccountContext with new session
       window.location.href = '/home'
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to import identity. The file may be corrupted or invalid.')
+      setError(err instanceof Error ? err.message : 'Failed to import account. The file may be corrupted or invalid.')
       setIsImporting(false)
     }
   }
@@ -122,7 +122,7 @@ function IdentityRestorePage() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => navigate('/identity/setup')}
+          onClick={() => navigate('/account/setup')}
           className="absolute top-12 left-6 h-0 w-12 z-10"
         >
           <ArrowLeft className="h-6 w-6" />
@@ -140,7 +140,7 @@ function IdentityRestorePage() {
                 </h1>
               </div>
               <p className="text-muted-foreground text-base leading-relaxed max-w-sm fade-in">
-                Import your identity from a previously exported backup file.
+                Import your account from a previously exported backup file.
               </p>
             </div>
             <div className="space-y-4 text-sm text-muted-foreground font-light">
@@ -207,7 +207,7 @@ function IdentityRestorePage() {
             {isImporting && (
               <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground font-light">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Importing identity...
+                Importing account...
               </div>
             )}
 

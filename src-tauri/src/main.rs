@@ -910,10 +910,10 @@ async fn create_temporary_invite(signaling_server: String, server_id: String, ma
     let server = manager.load_server(&server_id)
         .map_err(|e| format!("Failed to load house: {}", e))?;
 
-    // Generate a short human-shareable code (18 chars)
+    // Generate a short human-shareable code (8 chars - easy to read over phone)
     const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let mut code = String::new();
-    let mut bytes = [0u8; 18];
+    let mut code = String::with_capacity(8);
+    let mut bytes = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut bytes);
     for b in bytes {
         code.push(CHARSET[(b as usize) % CHARSET.len()] as char);

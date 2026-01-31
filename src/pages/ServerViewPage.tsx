@@ -225,7 +225,8 @@ function ServerViewPage() {
   const getActiveInviteCode = (): string | null => {
     const uri = getActiveInviteUri()
     if (!uri) return null
-    const parsed = uri.trim().match(/^rmmt:\/\/([^@]+)@/i)
+    // Backend uses cordia://CODE@host; accept cordia:// or legacy rmmt://
+    const parsed = uri.trim().match(/^(?:cordia|rmmt):\/\/([^@]+)@/i)
     return parsed ? parsed[1] : null
   }
 
