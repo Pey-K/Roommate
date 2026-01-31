@@ -194,15 +194,15 @@ export function ConnectionSettings() {
           <div className="h-px bg-foreground/20 mt-1 w-full"></div>
         </div>
         <p className="text-xs text-muted-foreground font-light">
-          Configure your signaling server connection for P2P voice chat
+          Configure your beacon connection for P2P voice chat
         </p>
       </div>
 
       <div className="space-y-8">
-        {/* Signaling Server URL */}
+        {/* Beacon URL */}
         <div className="space-y-3">
           <Label htmlFor="signaling-url" className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Signaling Server URL
+            Beacon URL
           </Label>
           <div className="flex gap-2">
             <Input
@@ -251,7 +251,7 @@ export function ConnectionSettings() {
               <div className="min-w-0">
                 <p className="text-sm font-light">{getStatusText()}</p>
                 <p className="text-xs text-muted-foreground font-light truncate">
-                  {url || 'No server configured'}
+                  {url || 'No beacon configured'}
                 </p>
               </div>
             </div>
@@ -321,7 +321,7 @@ export function ConnectionSettings() {
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Setup</p>
           <div className="bg-muted/20 border border-border/50 rounded-md p-4 space-y-2 text-sm font-light">
             <ol className="list-decimal list-inside space-y-1 text-muted-foreground ml-2">
-              <li>Deploy the signaling server on your VPS</li>
+              <li>Deploy the beacon on your VPS</li>
               <li>Use port 9001 (default)</li>
               <li>Enter `wss://YOUR_DOMAIN` (recommended)</li>
               <li>Save, then Check</li>

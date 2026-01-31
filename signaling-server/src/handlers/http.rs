@@ -177,7 +177,7 @@ pub async fn handle_api_request(
             if path_parts.len() < 4 {
                 return Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("House endpoint not found"))
+                    .body(Body::from("Server endpoint not found"))
                     .unwrap());
             }
 
@@ -198,7 +198,7 @@ pub async fn handle_api_request(
                         };
                         if let Some(pool) = db {
                             if let Err(e) = upsert_house_hint_db(&pool, &hint).await {
-                                warn!("Failed to persist house hint: {}", e);
+                                warn!("Failed to persist server hint: {}", e);
                             }
                         } else {
                             let mut events = state.events.lock().await;
@@ -217,7 +217,7 @@ pub async fn handle_api_request(
                         let signaling = state.signaling.lock().await;
                         signaling.broadcast_house_hint_updated(&signing_pubkey, &hint);
                     }
-                    info!("Registered house hint");
+                    info!("Registered server hint");
                     Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/json")
@@ -225,7 +225,7 @@ pub async fn handle_api_request(
                         .unwrap())
                 }
                 Err(e) => {
-                    warn!("Failed to parse house hint: {}", e);
+                    warn!("Failed to parse server hint: {}", e);
                     Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Body::from(format!("Invalid request body: {}", e)))
@@ -310,7 +310,7 @@ pub async fn handle_api_request(
                         }
                         None => Ok(Response::builder()
                             .status(StatusCode::NOT_FOUND)
-                            .body(Body::from("House hint not found"))
+                            .body(Body::from("Server hint not found"))
                             .unwrap()),
                     };
                 }
@@ -327,7 +327,7 @@ pub async fn handle_api_request(
                 }
                 None => Ok(Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("House hint not found"))
+                    .body(Body::from("Server hint not found"))
                     .unwrap()),
             }
         }
@@ -393,7 +393,7 @@ pub async fn handle_api_request(
                         };
                         if let Some(pool) = db {
                             let _ = insert_event_db(&pool, &event).await;
-                            info!("Posted house event (db)");
+                            info!("Posted server event (db)");
                             return Ok(Response::builder()
                                 .status(StatusCode::CREATED)
                                 .header("Content-Type", "application/json")
@@ -404,7 +404,7 @@ pub async fn handle_api_request(
 
                     let mut events = state.events.lock().await;
                     events.post_event(signing_pubkey, event);
-                    info!("Posted house event");
+                    info!("Posted server event");
                     Ok(Response::builder()
                         .status(StatusCode::CREATED)
                         .header("Content-Type", "application/json")
@@ -412,7 +412,7 @@ pub async fn handle_api_request(
                         .unwrap())
                 }
                 Err(e) => {
-                    warn!("Failed to parse house event: {}", e);
+                    warn!("Failed to parse server event: {}", e);
                     Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Body::from(format!("Invalid request body: {}", e)))

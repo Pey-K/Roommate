@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-echo "🏠 Roommate Signaling Server Installer"
-echo "======================================"
+echo "🏠 Cordia Beacon Installer"
+echo "========================="
 echo ""
 
 # Default installation directory
-INSTALL_DIR="${INSTALL_DIR:-/mnt/App/stacks/roommate-signaling}"
+INSTALL_DIR="${INSTALL_DIR:-/mnt/App/stacks/cordia-beacon}"
 
 echo "📁 Installation directory: $INSTALL_DIR"
 echo ""
@@ -29,18 +29,18 @@ echo "Pulling Docker image (this may take a few minutes)..."
 docker-compose pull
 
 echo ""
-echo "Starting signaling server..."
+echo "Starting beacon..."
 docker-compose up -d
 
 echo ""
 echo "🎉 Installation complete!"
 echo ""
-echo "Your signaling server is now running at ws://localhost:9001"
+echo "Your beacon is now running at ws://localhost:9001"
 echo "Data will be stored at: /mnt/App/apps/signal"
 echo ""
 echo "Useful commands:"
-echo "  View logs:    docker-compose logs -f signaling-server"
-echo "  Stop server:  docker-compose down"
+echo "  View logs:    docker-compose logs -f cordia-beacon"
+echo "  Stop beacon:  docker-compose down"
 echo "  Restart:      docker-compose restart"
 echo "  Update:       docker-compose pull && docker-compose up -d"
 echo ""

@@ -1,6 +1,6 @@
-# Contributing to Roommate
+# Contributing to Cordia
 
-Thank you for your interest in contributing to Roommate! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Cordia! This document provides guidelines and instructions for contributing.
 
 ## Getting Started
 
@@ -240,4 +240,4 @@ When reporting bugs or requesting features:
 
 By contributing, you agree that your contributions will be licensed under the same license as the project (see [LICENSE](LICENSE)).
 
-Thank you for contributing to Roommate! 🎉
+Thank you for contributing to Cordia! 🎉

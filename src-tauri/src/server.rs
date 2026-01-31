@@ -13,12 +13,12 @@ use zeroize::Zeroize;
 use crate::account_manager::AccountManager;
 
 #[derive(Error, Debug)]
-pub enum HouseError {
+pub enum ServerError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-    #[error("House not found: {0}")]
+    #[error("Server not found: {0}")]
     NotFound(String),
     #[error("Invalid invite code")]
     InvalidInviteCode,
@@ -60,14 +60,14 @@ impl Default for ConnectionMode {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Room {
+pub struct Chat {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HouseMember {
+pub struct ServerMember {
     pub user_id: String,       // User's public key hash
     pub display_name: String,
     pub joined_at: DateTime<Utc>,
@@ -75,15 +75,16 @@ pub struct HouseMember {
     pub x25519_pubkey: Option<String>,  // Base64-encoded X25519 public key for key exchange
 }
 
-/// Stored house state with encrypted secrets
+/// Stored server state with encrypted secrets
 /// The symmetric key and signing secret are stored encrypted separately
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HouseStorage {
+pub struct ServerStorage {
     pub id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
-    pub rooms: Vec<Room>,
-    pub members: Vec<HouseMember>,
+    #[serde(rename = "rooms")]
+    pub chats: Vec<Chat>,
+    pub members: Vec<ServerMember>,
 
     // Signing (Ed25519) - public only in storage
     pub signing_pubkey: String,  // Base64-encoded Ed25519 verifying key
@@ -101,7 +102,7 @@ pub struct HouseStorage {
     pub signaling_url: Option<String>,
 
     // Deprecated field - keep for backward compatibility
-    #[serde(default = "HouseStorage::generate_legacy_invite_code")]
+    #[serde(default = "ServerStorage::generate_legacy_invite_code")]
     pub invite_code: String,
 
     // Temporary invite (Option B): stored/displayed to members, expires client-side (server enforces too)
@@ -115,7 +116,7 @@ pub struct HouseStorage {
     pub public_key: String,
 }
 
-impl HouseStorage {
+impl ServerStorage {
     fn generate_legacy_invite_code() -> String {
         use rand::Rng;
         const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -129,15 +130,16 @@ impl HouseStorage {
     }
 }
 
-/// Public house info for frontend serialization
+/// Public server info for frontend serialization
 /// Does not contain any secrets
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HouseInfo {
+pub struct ServerInfo {
     pub id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
-    pub rooms: Vec<Room>,
-    pub members: Vec<HouseMember>,
+    #[serde(rename = "rooms")]
+    pub chats: Vec<Chat>,
+    pub members: Vec<ServerMember>,
     pub signing_pubkey: String,
     pub invite_uri: String,
     pub connection_mode: ConnectionMode,
@@ -152,22 +154,22 @@ pub struct HouseInfo {
     pub has_signing_key: bool,
 }
 
-/// Runtime house struct with decrypted secrets in memory
+/// Runtime server struct with decrypted secrets in memory
 /// Secrets are zeroized on drop
 #[derive(Clone)]
-pub struct House {
+pub struct Server {
     pub id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
-    pub rooms: Vec<Room>,
-    pub members: Vec<HouseMember>,
+    pub chats: Vec<Chat>,
+    pub members: Vec<ServerMember>,
 
     // === SIGNING (Ed25519) - for authentication ===
     pub signing_pubkey: String,  // Base64-encoded Ed25519 verifying key
     signing_secret: Option<Vec<u8>>,  // Ed25519 signing key (local only, zeroized on drop)
 
     // === ENCRYPTION (XChaCha20-Poly1305) - THE shared secret ===
-    house_symmetric_key: Option<Vec<u8>>,  // 256-bit symmetric key (local only, zeroized on drop)
+    server_symmetric_key: Option<Vec<u8>>,  // 256-bit symmetric key (local only, zeroized on drop)
 
     pub invite_uri: String,
     pub connection_mode: ConnectionMode,
@@ -180,26 +182,26 @@ pub struct House {
     pub public_key: String,
 }
 
-impl Drop for House {
+impl Drop for Server {
     fn drop(&mut self) {
         // Securely clear secrets from memory
         if let Some(ref mut key) = self.signing_secret {
             key.zeroize();
         }
-        if let Some(ref mut key) = self.house_symmetric_key {
+        if let Some(ref mut key) = self.server_symmetric_key {
             key.zeroize();
         }
     }
 }
 
-impl House {
+impl Server {
     /// Create a new house with fresh cryptographic keys
     pub fn new(
         name: String,
         creator_user_id: String,
         creator_display_name: String,
         signaling_url: Option<String>,
-    ) -> Result<Self, HouseError> {
+    ) -> Result<Self, ServerError> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
@@ -216,17 +218,17 @@ impl House {
         OsRng.fill_bytes(&mut symmetric_key);
 
         // Generate invite URI
-        let server = signaling_url.as_deref().unwrap_or("signal.roommate.app");
-        let invite_uri = format!("rmmt://{}@{}", signing_pubkey, server);
+        let beacon = signaling_url.as_deref().unwrap_or("signal.pkcollection.net");
+        let invite_uri = format!("rmmt://{}@{}", signing_pubkey, beacon);
 
-        // Create default "General" room
-        let general_room = Room {
+        // Create default "General" chat
+        let general_chat = Chat {
             id: Uuid::new_v4().to_string(),
             name: "General".to_string(),
-            description: Some("Default room".to_string()),
+            description: Some("Default chat".to_string()),
         };
 
-        let creator = HouseMember {
+        let creator = ServerMember {
             user_id: creator_user_id,
             display_name: creator_display_name,
             joined_at: now,
@@ -234,17 +236,17 @@ impl House {
         };
 
         // Legacy invite code for backwards compatibility
-        let invite_code = HouseStorage::generate_legacy_invite_code();
+        let invite_code = ServerStorage::generate_legacy_invite_code();
 
-        Ok(House {
+        Ok(Server {
             id,
             name,
             created_at: now,
-            rooms: vec![general_room],
+            chats: vec![general_chat],
             members: vec![creator],
             signing_pubkey: signing_pubkey.clone(),
             signing_secret: Some(signing_secret),
-            house_symmetric_key: Some(symmetric_key),
+            server_symmetric_key: Some(symmetric_key),
             invite_uri,
             connection_mode: ConnectionMode::Signaling,
             signaling_url,
@@ -257,7 +259,7 @@ impl House {
 
     /// Check if this house has the symmetric key (can encrypt/decrypt)
     pub fn has_symmetric_key(&self) -> bool {
-        self.house_symmetric_key.is_some()
+        self.server_symmetric_key.is_some()
     }
 
     /// Check if this house has the signing key (can sign events)
@@ -267,9 +269,9 @@ impl House {
 
     /// Generate a sealed invite blob for a new member
     /// Uses X25519 key exchange to encrypt the symmetric key
-    pub fn generate_invite(&self, recipient_x25519_pubkey: &[u8; 32]) -> Result<String, HouseError> {
-        let symmetric_key = self.house_symmetric_key.as_ref()
-            .ok_or(HouseError::MissingSymmetricKey)?;
+    pub fn generate_invite(&self, recipient_x25519_pubkey: &[u8; 32]) -> Result<String, ServerError> {
+        let symmetric_key = self.server_symmetric_key.as_ref()
+            .ok_or(ServerError::MissingSymmetricKey)?;
 
         // Generate ephemeral X25519 keypair for this invite
         let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
@@ -289,7 +291,7 @@ impl House {
         let cipher = XChaCha20Poly1305::new((&derived_key).into());
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
         let ciphertext = cipher.encrypt(&nonce, symmetric_key.as_ref())
-            .map_err(|_| HouseError::EncryptionFailed)?;
+            .map_err(|_| ServerError::EncryptionFailed)?;
 
         // Pack: ephemeral_pubkey (32) || nonce (24) || ciphertext
         let mut sealed = Vec::new();
@@ -304,20 +306,20 @@ impl House {
     pub fn decrypt_invite(
         sealed_blob: &str,
         recipient_x25519_secret: &[u8; 32],
-    ) -> Result<Vec<u8>, HouseError> {
+    ) -> Result<Vec<u8>, ServerError> {
         let sealed = base64::decode(sealed_blob)
-            .map_err(|e| HouseError::Base64Decode(e.to_string()))?;
+            .map_err(|e| ServerError::Base64Decode(e.to_string()))?;
 
         // Unpack: ephemeral_pubkey (32) || nonce (24) || ciphertext (32 + 16 tag)
         if sealed.len() < 32 + 24 + 32 + 16 {
-            return Err(HouseError::InvalidInviteBlob);
+            return Err(ServerError::InvalidInviteBlob);
         }
 
         let ephemeral_pubkey_bytes: [u8; 32] = sealed[0..32].try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let ephemeral_pubkey = X25519PublicKey::from(ephemeral_pubkey_bytes);
         let nonce: [u8; 24] = sealed[32..56].try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let ciphertext = &sealed[56..];
 
         // Perform X25519 key exchange
@@ -333,18 +335,18 @@ impl House {
         // Decrypt symmetric key
         let cipher = XChaCha20Poly1305::new((&derived_key).into());
         let plaintext = cipher.decrypt((&nonce).into(), ciphertext)
-            .map_err(|_| HouseError::DecryptionFailed)?;
+            .map_err(|_| ServerError::DecryptionFailed)?;
 
         Ok(plaintext)
     }
 
     /// Sign data with house signing key (Ed25519)
-    pub fn sign(&self, data: &[u8]) -> Result<String, HouseError> {
+    pub fn sign(&self, data: &[u8]) -> Result<String, ServerError> {
         let secret = self.signing_secret.as_ref()
-            .ok_or(HouseError::MissingSigningKey)?;
+            .ok_or(ServerError::MissingSigningKey)?;
 
         let secret_bytes: [u8; 32] = secret.as_slice().try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let signing_key = SigningKey::from_bytes(&secret_bytes);
         let signature = signing_key.sign(data);
 
@@ -352,35 +354,35 @@ impl House {
     }
 
     /// Verify signature with house signing pubkey (Ed25519)
-    pub fn verify(&self, data: &[u8], signature_b64: &str) -> Result<bool, HouseError> {
+    pub fn verify(&self, data: &[u8], signature_b64: &str) -> Result<bool, ServerError> {
         let pubkey_bytes = base64::decode(&self.signing_pubkey)
-            .map_err(|e| HouseError::Base64Decode(e.to_string()))?;
+            .map_err(|e| ServerError::Base64Decode(e.to_string()))?;
 
         let pubkey_array: [u8; 32] = pubkey_bytes.as_slice().try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let verifying_key = VerifyingKey::from_bytes(&pubkey_array)
-            .map_err(|_| HouseError::InvalidSignature)?;
+            .map_err(|_| ServerError::InvalidSignature)?;
 
         let signature_bytes = base64::decode(signature_b64)
-            .map_err(|e| HouseError::Base64Decode(e.to_string()))?;
+            .map_err(|e| ServerError::Base64Decode(e.to_string()))?;
         let sig_array: [u8; 64] = signature_bytes.as_slice().try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let signature = Signature::from_bytes(&sig_array);
 
         Ok(verifying_key.verify(data, &signature).is_ok())
     }
 
     /// Encrypt data with house symmetric key (XChaCha20-Poly1305)
-    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, HouseError> {
-        let key = self.house_symmetric_key.as_ref()
-            .ok_or(HouseError::MissingSymmetricKey)?;
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, ServerError> {
+        let key = self.server_symmetric_key.as_ref()
+            .ok_or(ServerError::MissingSymmetricKey)?;
 
         let key_array: [u8; 32] = key.as_slice().try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let cipher = XChaCha20Poly1305::new((&key_array).into());
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
         let ciphertext = cipher.encrypt(&nonce, plaintext)
-            .map_err(|_| HouseError::EncryptionFailed)?;
+            .map_err(|_| ServerError::EncryptionFailed)?;
 
         // Prepend nonce to ciphertext
         let mut result = nonce.to_vec();
@@ -389,27 +391,27 @@ impl House {
     }
 
     /// Decrypt data with house symmetric key (XChaCha20-Poly1305)
-    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, HouseError> {
-        let key = self.house_symmetric_key.as_ref()
-            .ok_or(HouseError::MissingSymmetricKey)?;
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, ServerError> {
+        let key = self.server_symmetric_key.as_ref()
+            .ok_or(ServerError::MissingSymmetricKey)?;
 
         if ciphertext.len() < 24 {
-            return Err(HouseError::InvalidCiphertext);
+            return Err(ServerError::InvalidCiphertext);
         }
 
         let nonce: [u8; 24] = ciphertext[..24].try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let encrypted = &ciphertext[24..];
 
         let key_array: [u8; 32] = key.as_slice().try_into()
-            .map_err(|_| HouseError::KeyConversion)?;
+            .map_err(|_| ServerError::KeyConversion)?;
         let cipher = XChaCha20Poly1305::new((&key_array).into());
         cipher.decrypt((&nonce).into(), encrypted)
-            .map_err(|_| HouseError::DecryptionFailed)
+            .map_err(|_| ServerError::DecryptionFailed)
     }
 
     pub fn add_member(&mut self, user_id: String, display_name: String) {
-        let member = HouseMember {
+        let member = ServerMember {
             user_id,
             display_name,
             joined_at: Utc::now(),
@@ -418,19 +420,19 @@ impl House {
         self.members.push(member);
     }
 
-    pub fn add_room(&mut self, name: String, description: Option<String>) -> Room {
-        let room = Room {
+    pub fn add_chat(&mut self, name: String, description: Option<String>) -> Chat {
+        let chat = Chat {
             id: Uuid::new_v4().to_string(),
             name,
             description,
         };
-        self.rooms.push(room.clone());
-        room
+        self.chats.push(chat.clone());
+        chat
     }
 
-    pub fn remove_room(&mut self, room_id: &str) -> bool {
-        if let Some(pos) = self.rooms.iter().position(|r| r.id == room_id) {
-            self.rooms.remove(pos);
+    pub fn remove_chat(&mut self, chat_id: &str) -> bool {
+        if let Some(pos) = self.chats.iter().position(|r| r.id == chat_id) {
+            self.chats.remove(pos);
             true
         } else {
             false
@@ -439,13 +441,13 @@ impl House {
 
     /// Convert to storage format for serialization
     /// Encrypts secrets with device key before storage
-    pub fn to_storage(&self, device_key: &[u8; 32]) -> Result<HouseStorage, HouseError> {
+    pub fn to_storage(&self, device_key: &[u8; 32]) -> Result<ServerStorage, ServerError> {
         // Encrypt signing secret if present
         let encrypted_signing_secret = if let Some(ref secret) = self.signing_secret {
             let cipher = XChaCha20Poly1305::new(device_key.into());
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let ciphertext = cipher.encrypt(&nonce, secret.as_ref())
-                .map_err(|_| HouseError::EncryptionFailed)?;
+                .map_err(|_| ServerError::EncryptionFailed)?;
             let mut result = nonce.to_vec();
             result.extend(ciphertext);
             Some(base64::encode(&result))
@@ -454,11 +456,11 @@ impl House {
         };
 
         // Encrypt symmetric key if present
-        let encrypted_symmetric_key = if let Some(ref key) = self.house_symmetric_key {
+        let encrypted_symmetric_key = if let Some(ref key) = self.server_symmetric_key {
             let cipher = XChaCha20Poly1305::new(device_key.into());
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let ciphertext = cipher.encrypt(&nonce, key.as_ref())
-                .map_err(|_| HouseError::EncryptionFailed)?;
+                .map_err(|_| ServerError::EncryptionFailed)?;
             let mut result = nonce.to_vec();
             result.extend(ciphertext);
             Some(base64::encode(&result))
@@ -466,11 +468,11 @@ impl House {
             None
         };
 
-        Ok(HouseStorage {
+        Ok(ServerStorage {
             id: self.id.clone(),
             name: self.name.clone(),
             created_at: self.created_at,
-            rooms: self.rooms.clone(),
+            chats: self.chats.clone(),
             members: self.members.clone(),
             signing_pubkey: self.signing_pubkey.clone(),
             encrypted_signing_secret,
@@ -486,52 +488,52 @@ impl House {
     }
 
     /// Create from storage format, decrypting secrets with device key
-    pub fn from_storage(storage: HouseStorage, device_key: &[u8; 32]) -> Result<Self, HouseError> {
+    pub fn from_storage(storage: ServerStorage, device_key: &[u8; 32]) -> Result<Self, ServerError> {
         // Decrypt signing secret if present
         let signing_secret = if let Some(ref encrypted) = storage.encrypted_signing_secret {
             let data = base64::decode(encrypted)
-                .map_err(|e| HouseError::Base64Decode(e.to_string()))?;
+                .map_err(|e| ServerError::Base64Decode(e.to_string()))?;
             if data.len() < 24 {
-                return Err(HouseError::InvalidCiphertext);
+                return Err(ServerError::InvalidCiphertext);
             }
             let nonce: [u8; 24] = data[..24].try_into()
-                .map_err(|_| HouseError::KeyConversion)?;
+                .map_err(|_| ServerError::KeyConversion)?;
             let ciphertext = &data[24..];
             let cipher = XChaCha20Poly1305::new(device_key.into());
             let plaintext = cipher.decrypt((&nonce).into(), ciphertext)
-                .map_err(|_| HouseError::DecryptionFailed)?;
+                .map_err(|_| ServerError::DecryptionFailed)?;
             Some(plaintext)
         } else {
             None
         };
 
         // Decrypt symmetric key if present
-        let house_symmetric_key = if let Some(ref encrypted) = storage.encrypted_symmetric_key {
+        let server_symmetric_key = if let Some(ref encrypted) = storage.encrypted_symmetric_key {
             let data = base64::decode(encrypted)
-                .map_err(|e| HouseError::Base64Decode(e.to_string()))?;
+                .map_err(|e| ServerError::Base64Decode(e.to_string()))?;
             if data.len() < 24 {
-                return Err(HouseError::InvalidCiphertext);
+                return Err(ServerError::InvalidCiphertext);
             }
             let nonce: [u8; 24] = data[..24].try_into()
-                .map_err(|_| HouseError::KeyConversion)?;
+                .map_err(|_| ServerError::KeyConversion)?;
             let ciphertext = &data[24..];
             let cipher = XChaCha20Poly1305::new(device_key.into());
             let plaintext = cipher.decrypt((&nonce).into(), ciphertext)
-                .map_err(|_| HouseError::DecryptionFailed)?;
+                .map_err(|_| ServerError::DecryptionFailed)?;
             Some(plaintext)
         } else {
             None
         };
 
-        Ok(House {
+        Ok(Server {
             id: storage.id,
             name: storage.name,
             created_at: storage.created_at,
-            rooms: storage.rooms,
+            chats: storage.chats,
             members: storage.members,
             signing_pubkey: storage.signing_pubkey.clone(),
             signing_secret,
-            house_symmetric_key,
+            server_symmetric_key,
             invite_uri: storage.invite_uri,
             connection_mode: storage.connection_mode,
             signaling_url: storage.signaling_url,
@@ -543,16 +545,16 @@ impl House {
     }
 
     /// Create from storage format without decrypting secrets (read-only view)
-    pub fn from_storage_readonly(storage: HouseStorage) -> Self {
-        House {
+    pub fn from_storage_readonly(storage: ServerStorage) -> Self {
+        Server {
             id: storage.id,
             name: storage.name,
             created_at: storage.created_at,
-            rooms: storage.rooms,
+            chats: storage.chats,
             members: storage.members,
             signing_pubkey: storage.signing_pubkey.clone(),
             signing_secret: None,
-            house_symmetric_key: None,
+            server_symmetric_key: None,
             invite_uri: storage.invite_uri,
             connection_mode: storage.connection_mode,
             signaling_url: storage.signaling_url,
@@ -565,19 +567,19 @@ impl House {
 
     /// Set the symmetric key (used when joining via invite)
     pub fn set_symmetric_key(&mut self, key: Vec<u8>) {
-        self.house_symmetric_key = Some(key);
+        self.server_symmetric_key = Some(key);
     }
 
     pub fn get_symmetric_key(&self) -> Option<Vec<u8>> {
-        self.house_symmetric_key.clone()
+        self.server_symmetric_key.clone()
     }
 
     pub fn get_signing_secret(&self) -> Option<Vec<u8>> {
         self.signing_secret.clone()
     }
 
-    /// Convert to HouseInfo for frontend serialization
-    pub fn to_info(&self) -> HouseInfo {
+    /// Convert to ServerInfo for frontend serialization
+    pub fn to_info(&self) -> ServerInfo {
         fn derive_simple_invite_code(signing_pubkey: &str) -> String {
             signing_pubkey
                 .chars()
@@ -587,11 +589,11 @@ impl House {
                 .collect()
         }
 
-        HouseInfo {
+        ServerInfo {
             id: self.id.clone(),
             name: self.name.clone(),
             created_at: self.created_at,
-            rooms: self.rooms.clone(),
+            chats: self.chats.clone(),
             members: self.members.clone(),
             signing_pubkey: self.signing_pubkey.clone(),
             invite_uri: self.invite_uri.clone(),
@@ -603,31 +605,31 @@ impl House {
             active_invite_uri: self.active_invite_uri.clone(),
             active_invite_expires_at: self.active_invite_expires_at,
             public_key: self.public_key.clone(),
-            has_symmetric_key: self.house_symmetric_key.is_some(),
+            has_symmetric_key: self.server_symmetric_key.is_some(),
             has_signing_key: self.signing_secret.is_some(),
         }
     }
 }
 
-pub struct HouseManager {
+pub struct ServerManager {
     data_dir: PathBuf,
     account_id: Option<String>,
     device_key: [u8; 32],
 }
 
-impl HouseManager {
-    /// Create a HouseManager for the current session's account
+impl ServerManager {
+    /// Create a ServerManager for the current session's account
     /// Falls back to legacy mode if no session exists (for backwards compatibility)
-    pub fn new() -> Result<Self, HouseError> {
+    pub fn new() -> Result<Self, ServerError> {
         let account_manager = AccountManager::new()
-            .map_err(|e| HouseError::Account(e.to_string()))?;
+            .map_err(|e| ServerError::Account(e.to_string()))?;
 
         // Get device key for encrypting secrets
         let device_key = Self::get_device_key()?;
 
         // Check if there's an active session
         let session = account_manager.get_session()
-            .map_err(|e| HouseError::Account(e.to_string()))?;
+            .map_err(|e| ServerError::Account(e.to_string()))?;
 
         if let Some(account_id) = session.current_account_id {
             // Account mode: use account container
@@ -652,10 +654,10 @@ impl HouseManager {
         }
     }
 
-    /// Create a HouseManager for a specific account
-    pub fn for_account(account_id: &str) -> Result<Self, HouseError> {
+    /// Create a ServerManager for a specific account
+    pub fn for_account(account_id: &str) -> Result<Self, ServerError> {
         let account_manager = AccountManager::new()
-            .map_err(|e| HouseError::Account(e.to_string()))?;
+            .map_err(|e| ServerError::Account(e.to_string()))?;
 
         let device_key = Self::get_device_key()?;
 
@@ -670,7 +672,7 @@ impl HouseManager {
         })
     }
 
-    fn get_device_key() -> Result<[u8; 32], HouseError> {
+    fn get_device_key() -> Result<[u8; 32], ServerError> {
         // Derive a device-specific key from machine identifier
         // This mirrors the approach used in identity.rs
         use sha2::{Sha256, Digest};
@@ -684,7 +686,7 @@ impl HouseManager {
         Ok(hash.into())
     }
 
-    fn get_device_id() -> Result<String, HouseError> {
+    fn get_device_id() -> Result<String, ServerError> {
         #[cfg(target_os = "windows")]
         {
             #[cfg(feature = "windows-registry")]
@@ -766,20 +768,28 @@ impl HouseManager {
 
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
-            Err(HouseError::Io(std::io::Error::new(
+            Err(ServerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "Unsupported platform"
             )))
         }
     }
 
-    fn get_legacy_data_dir() -> Result<PathBuf, HouseError> {
+    fn get_legacy_data_dir() -> Result<PathBuf, ServerError> {
         // Check for custom data directory (for testing with multiple instances)
+        if let Ok(custom_dir) = std::env::var("CORDIA_DATA_DIR") {
+            let path = PathBuf::from(custom_dir);
+            if !path.exists() {
+                fs::create_dir_all(&path)
+                    .map_err(|e| ServerError::Io(e))?;
+            }
+            return Ok(path);
+        }
         if let Ok(custom_dir) = std::env::var("ROOMMATE_DATA_DIR") {
             let path = PathBuf::from(custom_dir);
             if !path.exists() {
                 fs::create_dir_all(&path)
-                    .map_err(|e| HouseError::Io(e))?;
+                    .map_err(|e| ServerError::Io(e))?;
             }
             return Ok(path);
         }
@@ -787,44 +797,44 @@ impl HouseManager {
         #[cfg(target_os = "windows")]
         {
             let app_data = std::env::var("APPDATA")
-                .map_err(|_| HouseError::Io(std::io::Error::new(
+                .map_err(|_| ServerError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "APPDATA not found"
                 )))?;
-            Ok(PathBuf::from(app_data).join("Roommate"))
+            Ok(PathBuf::from(app_data).join("Cordia"))
         }
 
         #[cfg(target_os = "macos")]
         {
             let home = std::env::var("HOME")
-                .map_err(|_| HouseError::Io(std::io::Error::new(
+                .map_err(|_| ServerError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "HOME not found"
                 )))?;
-            Ok(PathBuf::from(home).join("Library").join("Application Support").join("Roommate"))
+            Ok(PathBuf::from(home).join("Library").join("Application Support").join("Chatmate"))
         }
 
         #[cfg(target_os = "linux")]
         {
             let home = std::env::var("HOME")
-                .map_err(|_| HouseError::Io(std::io::Error::new(
+                .map_err(|_| ServerError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "HOME not found"
                 )))?;
-            Ok(PathBuf::from(home).join(".config").join("roommate"))
+            Ok(PathBuf::from(home).join(".config").join("cordia"))
         }
 
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
-            Err(HouseError::Io(std::io::Error::new(
+            Err(ServerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "Unsupported platform"
             )))
         }
     }
 
-    fn get_house_path(&self, house_id: &str) -> PathBuf {
-        self.data_dir.join("houses").join(format!("{}.json", house_id))
+    fn get_server_path(&self, server_id: &str) -> PathBuf {
+        self.data_dir.join("houses").join(format!("{}.json", server_id))
     }
 
     /// Get the account ID if in account mode
@@ -832,31 +842,31 @@ impl HouseManager {
         self.account_id.as_deref()
     }
 
-    pub fn create_house(&self, name: String, user_id: String, display_name: String) -> Result<House, HouseError> {
-        let house = House::new(name, user_id, display_name, None)?;
+    pub fn create_server(&self, name: String, user_id: String, display_name: String) -> Result<Server, ServerError> {
+        let server = Server::new(name, user_id, display_name, None)?;
 
-        // Save house file (no list.json needed - we scan the directory)
-        self.save_house(&house)?;
+        // Save server file (no list.json needed - we scan the directory)
+        self.save_server(&server)?;
 
-        Ok(house)
+        Ok(server)
     }
 
-    pub fn save_house(&self, house: &House) -> Result<(), HouseError> {
-        let house_path = self.get_house_path(&house.id);
-        let storage = house.to_storage(&self.device_key)?;
+    pub fn save_server(&self, server: &Server) -> Result<(), ServerError> {
+        let server_path = self.get_server_path(&server.id);
+        let storage = server.to_storage(&self.device_key)?;
         let json = serde_json::to_string_pretty(&storage)?;
-        fs::write(house_path, json)?;
+        fs::write(server_path, json)?;
         Ok(())
     }
 
-    /// Restore a house from exported data (plaintext keys will be encrypted with device key)
-    pub fn restore_house_from_export(
+    /// Restore a server from exported data (plaintext keys will be encrypted with device key)
+    pub fn restore_server_from_export(
         &self,
-        house_data: &serde_json::Value,
+        server_data: &serde_json::Value,
         plaintext_symmetric_key: Vec<u8>,
         plaintext_signing_secret: Option<Vec<u8>>,
-    ) -> Result<(), HouseError> {
-        // Ensure houses directory exists
+    ) -> Result<(), ServerError> {
+        // Ensure houses directory exists (backward compat path)
         let houses_dir = self.data_dir.join("houses");
         fs::create_dir_all(&houses_dir)?;
         use chacha20poly1305::{XChaCha20Poly1305, aead::{Aead, KeyInit}};
@@ -867,7 +877,7 @@ impl HouseManager {
             let cipher = XChaCha20Poly1305::new((&self.device_key).into());
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let ciphertext = cipher.encrypt(&nonce, plaintext_symmetric_key.as_ref())
-                .map_err(|_| HouseError::EncryptionFailed)?;
+                .map_err(|_| ServerError::EncryptionFailed)?;
             let mut result = nonce.to_vec();
             result.extend(ciphertext);
             Some(base64::encode(&result))
@@ -878,7 +888,7 @@ impl HouseManager {
             let cipher = XChaCha20Poly1305::new((&self.device_key).into());
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let ciphertext = cipher.encrypt(&nonce, secret.as_ref())
-                .map_err(|_| HouseError::EncryptionFailed)?;
+                .map_err(|_| ServerError::EncryptionFailed)?;
             let mut result = nonce.to_vec();
             result.extend(ciphertext);
             Some(base64::encode(&result))
@@ -886,77 +896,76 @@ impl HouseManager {
             None
         };
         
-        // Parse house data from export (minimal - rooms/members come from signaling server)
-        let house_id: String = house_data.get("id")
+        // Parse server data from export (minimal - chats/members come from beacon)
+        let server_id: String = server_data.get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .expect("Missing house id in export");
+            .expect("Missing server id in export");
         
-        // Use empty name - signaling server will provide the real name when syncing
-        // Don't use "Imported House" or any default - let server sync populate it
-        let name: String = house_data.get("name")
+        // Use empty name - beacon will provide the real name when syncing
+        let name: String = server_data.get("name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| String::new());
         
-        let created_at: DateTime<Utc> = house_data.get("created_at")
+        let created_at: DateTime<Utc> = server_data.get("created_at")
             .and_then(|v| v.as_str())
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
         
-        // Rooms and members start empty - signaling server will populate them
-        let rooms: Vec<Room> = house_data.get("rooms")
+        // Chats and members (JSON key "rooms" for backward compat)
+        let chats: Vec<Chat> = server_data.get("rooms")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         
-        let members: Vec<HouseMember> = house_data.get("members")
+        let members: Vec<ServerMember> = server_data.get("members")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         
-        let signing_pubkey: String = house_data.get("signing_pubkey")
+        let signing_pubkey: String = server_data.get("signing_pubkey")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .expect("Missing signing_pubkey in export");
         
-        let invite_uri: String = house_data.get("invite_uri")
+        let invite_uri: String = server_data.get("invite_uri")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
         
-        let connection_mode: ConnectionMode = house_data.get("connection_mode")
+        let connection_mode: ConnectionMode = server_data.get("connection_mode")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or(ConnectionMode::Signaling);
         
-        let signaling_url: Option<String> = house_data.get("signaling_url")
+        let signaling_url: Option<String> = server_data.get("signaling_url")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         
-        let invite_code: String = house_data.get("invite_code")
+        let invite_code: String = server_data.get("invite_code")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
         
-        let active_invite_uri: Option<String> = house_data.get("active_invite_uri")
+        let active_invite_uri: Option<String> = server_data.get("active_invite_uri")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         
-        let active_invite_expires_at: Option<DateTime<Utc>> = house_data.get("active_invite_expires_at")
+        let active_invite_expires_at: Option<DateTime<Utc>> = server_data.get("active_invite_expires_at")
             .and_then(|v| v.as_str())
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         
-        let public_key: String = house_data.get("public_key")
+        let public_key: String = server_data.get("public_key")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
         
-        // Create HouseStorage with encrypted keys
-        let storage = HouseStorage {
-            id: house_id.clone(),
+        // Create ServerStorage with encrypted keys
+        let storage = ServerStorage {
+            id: server_id.clone(),
             name,
             created_at,
-            rooms,
+            chats,
             members,
             signing_pubkey,
             encrypted_signing_secret,
@@ -971,48 +980,48 @@ impl HouseManager {
         };
         
         // Write to disk
-        let house_path = self.get_house_path(&house_id);
+        let server_path = self.get_server_path(&server_id);
         let json = serde_json::to_string_pretty(&storage)?;
-        fs::write(house_path, json)?;
+        fs::write(server_path, json)?;
         
         Ok(())
     }
 
-    pub fn load_house(&self, house_id: &str) -> Result<House, HouseError> {
-        let house_path = self.get_house_path(house_id);
+    pub fn load_server(&self, server_id: &str) -> Result<Server, ServerError> {
+        let server_path = self.get_server_path(server_id);
 
-        if !house_path.exists() {
-            return Err(HouseError::NotFound(house_id.to_string()));
+        if !server_path.exists() {
+            return Err(ServerError::NotFound(server_id.to_string()));
         }
 
-        let content = fs::read_to_string(&house_path)?;
-        let storage: HouseStorage = serde_json::from_str(&content)?;
-        House::from_storage(storage, &self.device_key)
+        let content = fs::read_to_string(&server_path)?;
+        let storage: ServerStorage = serde_json::from_str(&content)?;
+        Server::from_storage(storage, &self.device_key)
     }
 
-    /// Load house without decrypting secrets (for listing)
-    pub fn load_house_readonly(&self, house_id: &str) -> Result<House, HouseError> {
-        let house_path = self.get_house_path(house_id);
+    /// Load server without decrypting secrets (for listing)
+    pub fn load_server_readonly(&self, server_id: &str) -> Result<Server, ServerError> {
+        let server_path = self.get_server_path(server_id);
 
-        if !house_path.exists() {
-            return Err(HouseError::NotFound(house_id.to_string()));
+        if !server_path.exists() {
+            return Err(ServerError::NotFound(server_id.to_string()));
         }
 
-        let content = fs::read_to_string(&house_path)?;
-        let storage: HouseStorage = serde_json::from_str(&content)?;
-        Ok(House::from_storage_readonly(storage))
+        let content = fs::read_to_string(&server_path)?;
+        let storage: ServerStorage = serde_json::from_str(&content)?;
+        Ok(Server::from_storage_readonly(storage))
     }
 
-    /// List all house IDs by scanning the houses directory
+    /// List all server IDs by scanning the houses directory (backward compat path)
     /// No list.json needed - each house is a separate .json file
-    pub fn list_houses(&self) -> Result<Vec<String>, HouseError> {
+    pub fn list_servers(&self) -> Result<Vec<String>, ServerError> {
         let houses_dir = self.data_dir.join("houses");
 
         if !houses_dir.exists() {
             return Ok(Vec::new());
         }
 
-        let mut house_ids = Vec::new();
+        let mut server_ids = Vec::new();
         for entry in fs::read_dir(houses_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -1022,47 +1031,47 @@ impl HouseManager {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     // Skip the legacy list.json file
                     if stem != "list" {
-                        house_ids.push(stem.to_string());
+                        server_ids.push(stem.to_string());
                     }
                 }
             }
         }
 
-        Ok(house_ids)
+        Ok(server_ids)
     }
 
-    pub fn load_all_houses(&self) -> Result<Vec<House>, HouseError> {
-        let house_ids = self.list_houses()?;
-        let mut houses = Vec::new();
+    pub fn load_all_servers(&self) -> Result<Vec<Server>, ServerError> {
+        let server_ids = self.list_servers()?;
+        let mut servers = Vec::new();
 
-        for house_id in house_ids {
+        for server_id in server_ids {
             // Load with decryption to get full access to keys
-            if let Ok(house) = self.load_house(&house_id) {
-                houses.push(house);
+            if let Ok(server) = self.load_server(&server_id) {
+                servers.push(server);
             }
         }
 
-        Ok(houses)
+        Ok(servers)
     }
 
-    pub fn delete_house(&self, house_id: &str) -> Result<(), HouseError> {
-        // Simply delete the house file (no list.json to update)
-        let house_path = self.get_house_path(house_id);
-        if house_path.exists() {
-            fs::remove_file(house_path)?;
+    pub fn delete_server(&self, server_id: &str) -> Result<(), ServerError> {
+        // Simply delete the server file (no list.json to update)
+        let server_path = self.get_server_path(server_id);
+        if server_path.exists() {
+            fs::remove_file(server_path)?;
         }
 
         Ok(())
     }
 
-    pub fn find_house_by_invite(&self, invite_code: &str) -> Result<Option<House>, HouseError> {
-        let house_ids = self.list_houses()?;
+    pub fn find_server_by_invite(&self, invite_code: &str) -> Result<Option<Server>, ServerError> {
+        let server_ids = self.list_servers()?;
 
-        for house_id in house_ids {
-            if let Ok(house) = self.load_house_readonly(&house_id) {
-                if house.invite_code == invite_code {
+        for server_id in server_ids {
+            if let Ok(server) = self.load_server_readonly(&server_id) {
+                if server.invite_code == invite_code {
                     // Load with decryption for full access
-                    return Ok(Some(self.load_house(&house_id)?));
+                    return Ok(Some(self.load_server(&server_id)?));
                 }
             }
         }
@@ -1070,80 +1079,80 @@ impl HouseManager {
         Ok(None)
     }
 
-    pub fn add_member_to_house(&self, house_id: &str, user_id: String, display_name: String) -> Result<House, HouseError> {
-        let mut house = self.load_house(house_id)?;
+    pub fn add_member_to_server(&self, server_id: &str, user_id: String, display_name: String) -> Result<Server, ServerError> {
+        let mut server = self.load_server(server_id)?;
 
         // Check if user is already a member
-        if house.members.iter().any(|m| m.user_id == user_id) {
-            return Ok(house); // Already a member, just return the house
+        if server.members.iter().any(|m| m.user_id == user_id) {
+            return Ok(server); // Already a member, just return the server
         }
 
-        house.add_member(user_id, display_name);
-        self.save_house(&house)?;
+        server.add_member(user_id, display_name);
+        self.save_server(&server)?;
 
-        Ok(house)
+        Ok(server)
     }
 
-    pub fn add_room_to_house(&self, house_id: &str, name: String, description: Option<String>) -> Result<House, HouseError> {
-        let mut house = self.load_house(house_id)?;
-        house.add_room(name, description);
-        self.save_house(&house)?;
-        Ok(house)
+    pub fn add_chat_to_server(&self, server_id: &str, name: String, description: Option<String>) -> Result<Server, ServerError> {
+        let mut server = self.load_server(server_id)?;
+        server.add_chat(name, description);
+        self.save_server(&server)?;
+        Ok(server)
     }
 
     pub fn set_active_invite(
         &self,
-        house_id: &str,
+        server_id: &str,
         active_invite_uri: Option<String>,
         active_invite_expires_at: Option<DateTime<Utc>>,
-    ) -> Result<(), HouseError> {
-        let mut house = self.load_house(house_id)?;
-        house.active_invite_uri = active_invite_uri;
-        house.active_invite_expires_at = active_invite_expires_at;
-        self.save_house(&house)?;
+    ) -> Result<(), ServerError> {
+        let mut server = self.load_server(server_id)?;
+        server.active_invite_uri = active_invite_uri;
+        server.active_invite_expires_at = active_invite_expires_at;
+        self.save_server(&server)?;
         Ok(())
     }
 
-    pub fn find_house_id_by_signing_pubkey(&self, signing_pubkey: &str) -> Result<Option<String>, HouseError> {
-        let house_ids = self.list_houses()?;
-        for house_id in house_ids {
-            if let Ok(house) = self.load_house_readonly(&house_id) {
-                if house.signing_pubkey == signing_pubkey {
-                    return Ok(Some(house_id));
+    pub fn find_server_id_by_signing_pubkey(&self, signing_pubkey: &str) -> Result<Option<String>, ServerError> {
+        let server_ids = self.list_servers()?;
+        for server_id in server_ids {
+            if let Ok(server) = self.load_server_readonly(&server_id) {
+                if server.signing_pubkey == signing_pubkey {
+                    return Ok(Some(server_id));
                 }
             }
         }
         Ok(None)
     }
 
-    pub fn remove_room_from_house(&self, house_id: &str, room_id: &str) -> Result<House, HouseError> {
-        let mut house = self.load_house(house_id)?;
+    pub fn remove_chat_from_server(&self, server_id: &str, chat_id: &str) -> Result<Server, ServerError> {
+        let mut server = self.load_server(server_id)?;
 
-        if !house.remove_room(room_id) {
-            return Err(HouseError::NotFound(format!("Room {} not found", room_id)));
+        if !server.remove_chat(chat_id) {
+            return Err(ServerError::NotFound(format!("Chat {} not found", chat_id)));
         }
 
-        self.save_house(&house)?;
-        Ok(house)
+        self.save_server(&server)?;
+        Ok(server)
     }
 
-    /// Import a house "hint" (metadata-only) into this account's local storage.
-    /// This persists the house so it can show up in lists and be joined/used.
+    /// Import a server "hint" (metadata-only) into this account's local storage.
+    /// This persists the server so it can show up in lists and be joined/used.
     ///
     /// NOTE: This intentionally does NOT import any secrets. The encrypted secret fields
     /// are left as None. Key exchange / secret distribution is handled elsewhere.
-    pub fn import_house_hint(&self, info: HouseInfo) -> Result<(), HouseError> {
-        // Find existing house by signing_pubkey (not by id, since id can differ)
-        // This handles the case where we imported a house with a new UUID, but server provides different UUID
-        let (existing_house_id, preserve_encrypted_signing_secret, preserve_encrypted_symmetric_key) = 
-            match self.find_house_id_by_signing_pubkey(&info.signing_pubkey)? {
+    pub fn import_server_hint(&self, info: ServerInfo) -> Result<(), ServerError> {
+        // Find existing server by signing_pubkey (not by id, since id can differ)
+        // This handles the case where we imported a server with a new UUID, but beacon provides different UUID
+        let (existing_server_id, preserve_encrypted_signing_secret, preserve_encrypted_symmetric_key) = 
+            match self.find_server_id_by_signing_pubkey(&info.signing_pubkey)? {
                 Some(existing_id) => {
-                    // House exists - preserve its encrypted secrets
-                    let house_path = self.get_house_path(&existing_id);
-                    let (signing_secret, symmetric_key) = if house_path.exists() {
-                        match fs::read_to_string(&house_path)
+                    // Server exists - preserve its encrypted secrets
+                    let server_path = self.get_server_path(&existing_id);
+                    let (signing_secret, symmetric_key) = if server_path.exists() {
+                        match fs::read_to_string(&server_path)
                             .ok()
-                            .and_then(|s| serde_json::from_str::<HouseStorage>(&s).ok())
+                            .and_then(|s| serde_json::from_str::<ServerStorage>(&s).ok())
                         {
                             Some(existing) => (existing.encrypted_signing_secret, existing.encrypted_symmetric_key),
                             None => (None, None),
@@ -1154,18 +1163,18 @@ impl HouseManager {
                     (existing_id, signing_secret, symmetric_key)
                 }
                 None => {
-                    // New house - use the id from the server
+                    // New server - use the id from the beacon
                     (info.id.clone(), None, None)
                 }
             };
         
-        let house_path = self.get_house_path(&existing_house_id);
+        let server_path = self.get_server_path(&existing_server_id);
 
-        let storage = HouseStorage {
-            id: existing_house_id.clone(),
+        let storage = ServerStorage {
+            id: existing_server_id.clone(),
             name: info.name,
             created_at: info.created_at,
-            rooms: info.rooms,
+            chats: info.chats,
             members: info.members,
             signing_pubkey: info.signing_pubkey,
             encrypted_signing_secret: preserve_encrypted_signing_secret,
@@ -1180,38 +1189,38 @@ impl HouseManager {
         };
 
         let json = serde_json::to_string_pretty(&storage)?;
-        fs::write(house_path, json)?;
+        fs::write(server_path, json)?;
         Ok(())
     }
 
-    /// Import a house from an invite token that contains the house symmetric key.
+    /// Import a server from an invite token that contains the server symmetric key.
     /// This lets a new member decrypt future Option-B hints.
-    /// Returns the actual house ID used (may differ from info.id if house already existed).
-    pub fn import_house_invite(&self, info: HouseInfo, house_symmetric_key: Vec<u8>) -> Result<String, HouseError> {
-        // Check if house already exists by signing_pubkey
-        let existing_house_id_opt = self.find_house_id_by_signing_pubkey(&info.signing_pubkey)?;
+    /// Returns the actual server ID used (may differ from info.id if server already existed).
+    pub fn import_server_invite(&self, info: ServerInfo, server_symmetric_key: Vec<u8>) -> Result<String, ServerError> {
+        // Check if server already exists by signing_pubkey
+        let existing_server_id_opt = self.find_server_id_by_signing_pubkey(&info.signing_pubkey)?;
         
         // Encrypt symmetric key with device key for local storage
         let encrypted_symmetric_key = {
             let cipher = XChaCha20Poly1305::new((&self.device_key).into());
             let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-            let ciphertext = cipher.encrypt(&nonce, house_symmetric_key.as_ref())
-                .map_err(|_| HouseError::EncryptionFailed)?;
+            let ciphertext = cipher.encrypt(&nonce, server_symmetric_key.as_ref())
+                .map_err(|_| ServerError::EncryptionFailed)?;
             let mut result = nonce.to_vec();
             result.extend(ciphertext);
             Some(base64::encode(&result))
         };
 
-        // Use existing house ID if found, otherwise use the ID from info
-        let house_id = existing_house_id_opt.clone().unwrap_or(info.id.clone());
+        // Use existing server ID if found, otherwise use the ID from info
+        let server_id = existing_server_id_opt.clone().unwrap_or(info.id.clone());
         
-        // If house exists, preserve its encrypted_signing_secret
-        let preserve_encrypted_signing_secret = if let Some(ref existing_id) = existing_house_id_opt {
-            let house_path = self.get_house_path(existing_id);
-            if house_path.exists() {
-                match fs::read_to_string(&house_path)
+        // If server exists, preserve its encrypted_signing_secret
+        let preserve_encrypted_signing_secret = if let Some(ref existing_id) = existing_server_id_opt {
+            let server_path = self.get_server_path(existing_id);
+            if server_path.exists() {
+                match fs::read_to_string(&server_path)
                     .ok()
-                    .and_then(|s| serde_json::from_str::<HouseStorage>(&s).ok())
+                    .and_then(|s| serde_json::from_str::<ServerStorage>(&s).ok())
                 {
                     Some(existing) => existing.encrypted_signing_secret,
                     None => None,
@@ -1223,11 +1232,11 @@ impl HouseManager {
             None
         };
 
-        let storage = HouseStorage {
-            id: house_id.clone(),
+        let storage = ServerStorage {
+            id: server_id.clone(),
             name: info.name,
             created_at: info.created_at,
-            rooms: info.rooms,
+            chats: info.chats,
             members: info.members,
             signing_pubkey: info.signing_pubkey,
             encrypted_signing_secret: preserve_encrypted_signing_secret,
@@ -1241,9 +1250,9 @@ impl HouseManager {
             public_key: info.public_key,
         };
 
-        let house_path = self.get_house_path(&storage.id);
+        let server_path = self.get_server_path(&storage.id);
         let json = serde_json::to_string_pretty(&storage)?;
-        fs::write(house_path, json)?;
-        Ok(house_id)  // Return the actual house ID used
+        fs::write(server_path, json)?;
+        Ok(server_id)  // Return the actual server ID used
     }
 }

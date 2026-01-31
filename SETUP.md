@@ -1,6 +1,6 @@
 # Development Environment Setup
 
-This guide will help you set up your development environment for Roommate on Windows, macOS, and Linux.
+This guide will help you set up your development environment for Cordia on Windows, macOS, and Linux.
 
 ## Prerequisites
 

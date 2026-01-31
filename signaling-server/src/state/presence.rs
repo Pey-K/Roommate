@@ -10,7 +10,7 @@ pub struct PresenceUserStatus {
     pub active_signing_pubkey: Option<SigningPubkey>,
 }
 
-/// Presence state (user ↔ house)
+/// Presence state (user ↔ server)
 pub struct PresenceState {
     pub presence_conns: HashMap<ConnId, PresenceConn>,
     pub presence_users: HashMap<String, PresenceUser>,

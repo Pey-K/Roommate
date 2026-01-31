@@ -1,8 +1,8 @@
 services:
-  signaling-server:
-    image: ghcr.io/pey-k/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/pey-k/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - TZ=America/New_York
       - RUST_LOG=info

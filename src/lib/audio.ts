@@ -4,6 +4,22 @@ export interface AudioDevice {
   kind: 'audioinput' | 'audiooutput'
 }
 
+/**
+ * Request microphone permission once so the system/WebView2 prompt appears in a single place.
+ * Call early after login so the user sees the prompt once; later getUserMedia calls (e.g. in
+ * enumerateAudioDevices or voice capture) will already have permission.
+ * In packaged apps (Tauri/WebView2) the prompt is from the webview, not the OS; Tauri 1 does not
+ * expose a way to auto-grant media permissions, so the user must allow once.
+ */
+export async function requestMicrophonePermission(): Promise<void> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    stream.getTracks().forEach((t) => t.stop())
+  } catch {
+    // User denied or unavailable - ignore; later audio code will handle it
+  }
+}
+
 // Helper function to clean device labels
 function cleanDeviceLabel(label: string): string {
   // Remove Windows-specific prefixes like "Default -", "Communications -", "Multimedia -"

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Cordia rename**: Application rebranded from Roommate to Cordia. Terminology updated: house → Server, room → Chat, neighborhood → Home, neighbors → Friends, signaling server → beacon. Wire protocol and persisted data remain backward compatible (e.g. `house_id`/`room_id` in API, serde aliases for existing JSON).
+
 ## [1.0.0] - 2024
 
 ### Added

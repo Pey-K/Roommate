@@ -16,7 +16,7 @@ function SettingsPage() {
 
   // Presence: Settings is "Neighborhood" (not active in a specific house)
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('roommate:active-house-changed', { detail: { signing_pubkey: null } }))
+    window.dispatchEvent(new CustomEvent('cordia:active-server-changed', { detail: { signing_pubkey: null } }))
   }, [])
 
   const pages: { id: SettingsPage; label: string; icon: typeof User }[] = [
@@ -47,7 +47,7 @@ function SettingsPage() {
       <header className="border-b-2 border-border shrink-0">
         <div className="w-full flex h-16 items-center justify-between px-6">
           <div className="flex items-center gap-4">
-            <Link to="/houses">
+            <Link to="/home">
               <Button variant="ghost" size="icon" className="h-9 w-9">
                 <ArrowLeft className="h-4 w-4" />
               </Button>

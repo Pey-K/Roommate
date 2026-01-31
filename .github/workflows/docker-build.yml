@@ -1,4 +1,4 @@
-name: Build and Push Signaling Server
+name: Build and Push Cordia Beacon
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-signaling
+  IMAGE_NAME: ${{ github.repository }}-beacon
 
 jobs:
   build-and-push:
@@ -51,11 +51,11 @@ jobs:
         run: |
           echo "Checking for binary and entrypoint..."
           ls -la signaling-server/target/release/
-          test -f signaling-server/target/release/signaling-server
+          test -f signaling-server/target/release/cordia-beacon
           test -f signaling-server/entrypoint.sh
           echo "All required files present!"
           echo "Binary size:"
-          du -h signaling-server/target/release/signaling-server
+          du -h signaling-server/target/release/cordia-beacon
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3

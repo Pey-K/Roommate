@@ -2,12 +2,12 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:1421",
+    "devPath": "http://localhost:1420",
     "distDir": "../dist",
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "Roommate",
+    "productName": "Cordia",
     "version": "1.0.0"
   },
   "tauri": {
@@ -29,10 +29,18 @@
         "startDragging": true
       }
     },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/REPLACE_OWNER/REPLACE_REPO/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "REPLACE_WITH_PUBKEY_AFTER_TAURI_SIGNER_GENERATE"
+    },
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.roommate.app",
+      "identifier": "com.cordia.app",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -48,7 +56,7 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "Roommate",
+        "title": "Cordia",
         "width": 775,
         "height": 550,
         "minWidth": 375,

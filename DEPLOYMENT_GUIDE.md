@@ -1,12 +1,12 @@
 # Deployment Guide
 
-Simple guide for deploying your own Roommate signaling server to your NAS or server.
+Simple guide for deploying your own Cordia beacon to your NAS or server.
 
-**Note:** Roommate comes with a default signaling server at `signal.pkcollection.net` that you can use immediately. You only need to deploy your own server if you want full control over your signaling infrastructure.
+**Note:** Cordia comes with a default beacon at `signal.pkcollection.net` that you can use immediately. You only need to deploy your own beacon if you want full control over your infrastructure.
 
-**Privacy:** The signaling server cannot read your user data. All house data, room content, and messages are encrypted and stored locally on your device. The server only facilitates peer discovery and presence tracking. Your voice communication is direct peer-to-peer and never passes through the server.
+**Privacy:** The beacon cannot read your user data. All server data, chat content, and messages are encrypted and stored locally on your device. The beacon only facilitates peer discovery and presence tracking. Your voice communication is direct peer-to-peer and never passes through the server.
 
-You can change the signaling server URL at any time in Settings → Connections, and each account can use a different server.
+You can change the beacon URL at any time in Settings → Connections, and each account can use a different server.
 
 ## Installation Methods
 
@@ -15,17 +15,17 @@ You can change the signaling server URL at any time in Settings → Connections,
 If you have Dockge, Portainer, or any Docker GUI:
 
 1. Open your Docker manager in a browser
-2. Create a new stack/compose named `roommate-signaling`
+2. Create a new stack/compose named `cordia-beacon`
 3. Copy-paste this configuration:
 
 ```yaml
 version: '3.8'
 
 services:
-  signaling-server:
-    image: ghcr.io/YOUR_USERNAME/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/YOUR_USERNAME/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - PUID=1000
       - PGID=1000
@@ -55,20 +55,20 @@ See **[deploy/DOCKGE_SETUP.md](deploy/DOCKGE_SETUP.md)** for detailed instructio
 SSH into your NAS/server and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/install.sh | bash
 ```
 
 That's it! The installer will:
 - ✅ Create all necessary directories
 - ✅ Download the configuration
 - ✅ Pull the Docker image
-- ✅ Start the signaling server
+- ✅ Start the beacon
 - ✅ Set up proper permissions
 
 **Verify it's working:**
 ```bash
 cd /mnt/App/stacks/roommate-signaling
-docker-compose logs -f signaling-server
+docker-compose logs -f cordia-beacon
 ```
 
 You should see: `Signaling server listening on ws://127.0.0.1:9001`
@@ -85,7 +85,7 @@ mkdir -p /mnt/App/stacks/roommate-signaling
 cd /mnt/App/stacks/roommate-signaling
 
 # Download configuration
-wget https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/docker-compose.yml
+wget https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/docker-compose.yml
 
 # Update image name with your username
 # Edit docker-compose.yml and replace YOUR_USERNAME
@@ -99,7 +99,7 @@ docker-compose up -d
 
 ### Find Your Server IP
 
-You'll need your NAS/server's IP address to connect the Roommate app:
+You'll need your NAS/server's IP address to connect the Cordia app:
 
 ```bash
 hostname -I | awk '{print $1}'
@@ -109,7 +109,7 @@ This will show something like: `192.168.1.100`
 
 ### Update App Configuration
 
-The Roommate app needs to be configured with your server's IP address. The developer needs to update:
+The Cordia app needs to be configured with your server's IP address. The developer needs to update:
 
 **File:** `src-tauri/src/signaling.rs`
 
@@ -131,7 +131,7 @@ cd /mnt/App/stacks/roommate-signaling
 
 ### View Logs
 ```bash
-docker-compose logs -f signaling-server
+docker-compose logs -f cordia-beacon
 ```
 
 ### Stop Server
@@ -183,7 +183,7 @@ docker-compose ps
 
 1. **Check logs:**
    ```bash
-   docker-compose logs signaling-server
+   docker-compose logs cordia-beacon
    ```
 
 2. **Check if port is in use:**
@@ -207,12 +207,12 @@ sudo chown -R 1000:1000 /mnt/App/apps/signal
 
 ## Uninstalling
 
-To completely remove the signaling server:
+To completely remove the beacon:
 
 ```bash
 cd /mnt/App/stacks/roommate-signaling
 docker-compose down
-docker rmi ghcr.io/YOUR_USERNAME/roommate-signaling:latest
+docker rmi ghcr.io/YOUR_USERNAME/cordia-beacon:latest
 rm -rf /mnt/App/stacks/roommate-signaling
 # Optionally remove data
 rm -rf /mnt/App/apps/signal
@@ -223,23 +223,23 @@ rm -rf /mnt/App/apps/signal
 To use a custom installation directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | INSTALL_DIR=/your/custom/path bash
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/install.sh | INSTALL_DIR=/your/custom/path bash
 ```
 
 **Note:** You'll also need to update the data volume path in docker-compose.yml.
 
 ## Next Steps
 
-Once the signaling server is running:
+Once the beacon is running:
 
 1. ✅ Server is running on your NAS
-2. ⏭️ Configure the Roommate app with your NAS IP
+2. ⏭️ Configure the Cordia app with your NAS IP
 3. ⏭️ Distribute the app to your friends
 4. ⏭️ Start voice chatting!
 
 ## Getting Help
 
-- Check logs: `docker-compose logs -f signaling-server`
+- Check logs: `docker-compose logs -f cordia-beacon`
 - Verify Docker: `docker ps`
 - See [SIGNALING_SETUP.md](SIGNALING_SETUP.md) for local development setup
 - See [GITHUB_SETUP.md](GITHUB_SETUP.md) for automated builds

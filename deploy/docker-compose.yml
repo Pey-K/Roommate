@@ -1,10 +1,10 @@
 version: '3.8'
 
 services:
-  signaling-server:
-    image: ghcr.io/pey-k/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/pey-k/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - PUID=1000
       - PGID=1000
@@ -16,7 +16,7 @@ services:
       - "9001:9001"
     restart: unless-stopped
     healthcheck:
-      test: ["/app/signaling-server", "--healthcheck"]
+      test: ["/app/cordia-beacon", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5

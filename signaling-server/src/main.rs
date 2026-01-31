@@ -41,7 +41,7 @@ pub(crate) fn decode_path_segment(seg: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SignalingMessage {
-    /// Client registers with house_id and peer_id
+    /// Client registers with house_id (server id) and peer_id
     Register {
         house_id: HouseId,
         peer_id: PeerId,
@@ -75,14 +75,14 @@ pub enum SignalingMessage {
     Error {
         message: String,
     },
-    /// Broadcast when a new member joins the house
+    /// Broadcast when a new member joins the server
     HouseMemberJoined {
         house_id: HouseId,
         member_user_id: String,
         member_display_name: String,
     },
 
-    /// Broadcast when a house hint (snapshot) is updated via REST API
+    /// Broadcast when a server hint (snapshot) is updated via REST API
     HouseHintUpdated {
         signing_pubkey: SigningPubkey,
         encrypted_state: String,
@@ -94,7 +94,7 @@ pub enum SignalingMessage {
     // Presence (online/offline + active house)
     // ============================
 
-    /// Client declares it is online for a set of houses and optionally which house is currently active.
+    /// Client declares it is online for a set of servers and optionally which server is currently active.
     PresenceHello {
         user_id: String,
         signing_pubkeys: Vec<SigningPubkey>,
@@ -102,7 +102,7 @@ pub enum SignalingMessage {
         active_signing_pubkey: Option<SigningPubkey>,
     },
 
-    /// Client updates which house is currently active (or clears it to indicate "neighborhood").
+    /// Client updates which server is currently active (or clears it to indicate "home").
     PresenceActive {
         user_id: String,
         #[serde(default)]
@@ -146,8 +146,8 @@ pub enum SignalingMessage {
         signing_pubkeys: Vec<SigningPubkey>,
     },
 
-    /// Client asks for the latest known profile metadata for a set of user_ids relevant to a house.
-    /// (House member lists are opaque to the server, so clients provide the user_ids they care about.)
+    /// Client asks for the latest known profile metadata for a set of user_ids relevant to a server.
+    /// (Server member lists are opaque to the beacon, so clients provide the user_ids they care about.)
     ProfileHello {
         signing_pubkey: SigningPubkey,
         user_ids: Vec<String>,
@@ -180,7 +180,7 @@ pub enum SignalingMessage {
         room_id: String,
         peer_id: PeerId,      // Ephemeral session ID (UUID per join)
         user_id: String,      // Stable identity (public key hash)
-        signing_pubkey: SigningPubkey,  // House signing pubkey for presence broadcasting
+        signing_pubkey: SigningPubkey,  // Server signing pubkey for presence broadcasting
     },
 
     /// Server response to voice registration
@@ -272,7 +272,7 @@ pub struct VoicePeer {
 // Event Queue Types (REST API)
 // ============================================
 
-/// House hint - NOT authoritative, just a cache/recovery aid
+/// Server hint - NOT authoritative, just a cache/recovery aid
 /// Any member can overwrite at any time (no creator lock)
 /// 
 /// Trust boundary: Clients MUST treat local state as authoritative even if server state differs.
@@ -343,7 +343,7 @@ pub struct PresenceConn {
 #[derive(Debug, Clone)]
 /// Presence user tracking across multiple device connections.
 /// Trust boundary: Last connection wins for active_signing_pubkey (multi-device behavior).
-/// This is an intentional UX choice, not a bug - the most recently active device sets the active house.
+/// This is an intentional UX choice, not a bug - the most recently active device sets the active server.
 pub struct PresenceUser {
     pub conns: HashSet<ConnId>,
     pub signing_pubkeys: HashSet<SigningPubkey>,
@@ -776,9 +776,9 @@ async fn main() {
 
     let server = Server::bind(&addr).serve(make_svc);
 
-    info!("Signaling server listening on http://{}", addr);
+    info!("Beacon listening on http://{}", addr);
     info!("WebSocket endpoint: ws://{}", addr);
-    info!("REST API: http://{}/api/houses/{{signing_pubkey}}/...", addr);
+    info!("REST API: http://{}/api/houses/{{signing_pubkey}}/... (server hints)", addr);
     info!("Health check: http://{}/health", addr);
 
     if let Err(e) = server.await {

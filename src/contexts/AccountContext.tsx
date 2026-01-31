@@ -7,6 +7,7 @@ import {
   switchAccount,
   logoutAccount,
   loadIdentity,
+  listServers,
 } from '../lib/tauri';
 import { useIdentity } from './IdentityContext';
 
@@ -65,11 +66,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       }
       setAccountInfoMap(infoMap);
 
-      // AUTHORITY: If session exists, load identity
+      // AUTHORITY: If session exists, load identity and local servers so server list is ready when user lands on /home
       if (session.current_account_id) {
         try {
-          const identity = await loadIdentity();
+          const [identity, servers] = await Promise.all([
+            loadIdentity(),
+            listServers(),
+          ]);
           setIdentity(identity);
+          window.dispatchEvent(
+            new CustomEvent('cordia:servers-initial', {
+              detail: { servers, accountId: session.current_account_id },
+            })
+          );
         } catch (error) {
           console.error('Failed to load identity for session:', error);
           // Session exists but identity load failed - clear session + identity and surface error
@@ -115,12 +124,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   async function switchToAccount(accountId: string) {
     try {
       setAuthError(null);
-      // Set session first
+      // Set session first so listServers() reads the new account's data
       await switchAccount(accountId);
-      
-      // Load identity for new session
-      const identity = await loadIdentity();
+
+      // Load identity and local servers in parallel so servers are ready before we navigate
+      const [identity, servers] = await Promise.all([
+        loadIdentity(),
+        listServers(),
+      ]);
       setIdentity(identity);
+      // Propagate local servers immediately so ServerListPage shows them without waiting for signaling
+      window.dispatchEvent(
+        new CustomEvent('cordia:servers-initial', { detail: { servers, accountId } })
+      );
       setCurrentAccountId(accountId);
     } catch (error) {
       console.error('Failed to switch account:', error);

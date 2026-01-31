@@ -18,5 +18,5 @@ mkdir -p /config
 # Change ownership of config directory
 chown -R "$PUID":"$PGID" /config
 
-# Switch to the roommate user and run the signaling server
-exec gosu roommate /app/signaling-server
+# Switch to the roommate user and run the beacon
+exec gosu roommate /app/cordia-beacon

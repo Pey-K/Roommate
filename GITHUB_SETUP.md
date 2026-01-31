@@ -4,7 +4,7 @@ This guide will help you set up automatic Docker image builds using GitHub Actio
 
 ## Overview
 
-GitHub Actions will automatically build and push the signaling server Docker image to GitHub Container Registry (ghcr.io) whenever you push code to the repository.
+GitHub Actions will automatically build and push the beacon Docker image to GitHub Container Registry (ghcr.io) whenever you push code to the repository.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ git init
 git add .
 
 # Create first commit
-git commit -m "Initial commit: Roommate P2P voice chat app"
+git commit -m "Initial commit: Cordia P2P voice chat app"
 
 # Add remote (replace YOUR_USERNAME with your GitHub username)
 git remote add origin https://github.com/YOUR_USERNAME/roommate.git
@@ -86,7 +86,7 @@ git push
 The GitHub Actions workflow:
 
 1. **Triggers** on push to `main` branch
-2. **Builds** the signaling server Docker image
+2. **Builds** the beacon Docker image
 3. **Pushes** to GitHub Container Registry
 4. **Tags** as `latest` and with the commit SHA
 

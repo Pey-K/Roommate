@@ -43,7 +43,7 @@ function IdentitySetupPage() {
       await createIdentity(displayName.trim())
       
       // Reload to initialize AccountContext with new session
-      window.location.href = '/houses'
+      window.location.href = '/home'
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create identity')
       setIsCreating(false)

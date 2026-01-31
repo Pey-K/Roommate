@@ -1,4 +1,4 @@
-# Roommate Signaling Server - Dockge/Portainer Setup
+# Cordia Beacon - Dockge/Portainer Setup
 
 Easy setup using Dockge, Portainer, or any Docker GUI manager.
 
@@ -8,17 +8,17 @@ Easy setup using Dockge, Portainer, or any Docker GUI manager.
 
 1. Open Dockge in your browser
 2. Click **"+ Compose"** or **"Create Stack"**
-3. Name it: `roommate-signaling`
+3. Name it: `cordia-beacon`
 4. Paste this docker-compose.yml:
 
 ```yaml
 version: '3.8'
 
 services:
-  signaling-server:
-    image: ghcr.io/pey-k/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/pey-k/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - PUID=1000
       - PGID=1000
@@ -30,7 +30,7 @@ services:
       - "9001:9001"
     restart: unless-stopped
     healthcheck:
-      test: ["/app/signaling-server", "--healthcheck"]
+      test: ["/app/cordia-beacon", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -44,14 +44,14 @@ networks: {}
 That's it! Dockge will:
 - Pull the Docker image automatically
 - Create `/mnt/App/apps/signal` directory with proper permissions
-- Start the signaling server
+- Start the beacon
 
 ### Method 2: Import from URL
 
 Some container managers support importing from URL:
 
 1. Create new stack/compose
-2. Import from URL: `https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/docker-compose.yml`
+2. Import from URL: `https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/docker-compose.yml`
 3. Deploy
 
 ## For Portainer Users
@@ -59,7 +59,7 @@ Some container managers support importing from URL:
 ### Step 1: Create Stack
 
 1. Go to **Stacks** → **Add Stack**
-2. Name: `roommate-signaling`
+2. Name: `cordia-beacon`
 3. Choose **Web editor**
 
 ### Step 2: Paste Configuration
@@ -70,10 +70,10 @@ Copy and paste:
 version: '3.8'
 
 services:
-  signaling-server:
-    image: ghcr.io/pey-k/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/pey-k/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - PUID=1000
       - PGID=1000
@@ -85,7 +85,7 @@ services:
       - "9001:9001"
     restart: unless-stopped
     healthcheck:
-      test: ["/app/signaling-server", "--healthcheck"]
+      test: ["/app/cordia-beacon", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -181,13 +181,13 @@ When a new version is released:
 2. Click **"Pull & Restart"** or **"Recreate"**
 
 ### In Portainer:
-1. Go to Stacks → roommate-signaling
+1. Go to Stacks → cordia-beacon
 2. Click **"Pull and redeploy"**
 
 ### Manual Update:
 Stop the container, pull new image, start again:
 ```bash
-docker pull ghcr.io/pey-k/roommate-signaling:latest
+docker pull ghcr.io/pey-k/cordia-beacon:latest
 # Then restart container in your GUI
 ```
 
@@ -220,10 +220,10 @@ Simplified version without health check:
 version: '3.8'
 
 services:
-  signaling-server:
-    image: ghcr.io/pey-k/roommate-signaling:latest
-    container_name: roommate-signaling
-    hostname: roommate-signaling
+  cordia-beacon:
+    image: ghcr.io/pey-k/cordia-beacon:latest
+    container_name: cordia-beacon
+    hostname: cordia-beacon
     environment:
       - PUID=1000
       - PGID=1000
@@ -240,7 +240,7 @@ networks: {}
 
 ## Getting Your NAS IP
 
-You'll need this to configure the Roommate app.
+You'll need this to configure the Cordia app.
 
 ### Method 1: In your Docker GUI
 Most show the host IP in the dashboard
@@ -258,11 +258,11 @@ Check your router's connected devices list
 Once the container is running:
 1. ✅ Note your NAS IP address
 2. ✅ Verify port 9001 is accessible
-3. ⏭️ Configure Roommate app with your NAS IP
+3. ⏭️ Configure Cordia app with your NAS IP
 4. ⏭️ Start chatting!
 
 ## Support
 
 - **Logs**: Always check container logs first
-- **GitHub Issues**: https://github.com/Pey-K/Roommate/issues
+- **GitHub Issues**: https://github.com/Pey-K/Cordia/issues
 - **Docker Docs**: Your container manager's documentation

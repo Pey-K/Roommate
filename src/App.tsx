@@ -8,18 +8,19 @@ import { SpeakingProvider } from './contexts/SpeakingContext'
 import { ProfileProvider } from './contexts/ProfileContext'
 import { RemoteProfilesProvider } from './contexts/RemoteProfilesContext'
 import { WebRTCProvider } from './contexts/WebRTCContext'
-import { HousesProvider } from './contexts/HousesContext'
+import { ServersProvider } from './contexts/ServersContext'
 import { SidebarWidthProvider, useSidebarWidth } from './contexts/SidebarWidthContext'
-import { ActiveHouseProvider } from './contexts/ActiveHouseContext'
+import { ActiveServerProvider } from './contexts/ActiveServerContext'
 import TitleBar from './components/TitleBar'
-import { HouseSyncBootstrap } from './components/HouseSyncBootstrap'
+import { ServerSyncBootstrap } from './components/ServerSyncBootstrap'
+import { AppUpdater } from './components/AppUpdater'
 import { UserCard } from './components/UserCard'
 import SplashPage from './pages/SplashPage'
 import AccountSelectPage from './pages/AccountSelectPage'
 import IdentitySetupPage from './pages/IdentitySetupPage'
 import IdentityRestorePage from './pages/IdentityRestorePage'
-import HouseListPage from './pages/HouseListPage'
-import HouseViewPage from './pages/HouseViewPage'
+import ServerListPage from './pages/ServerListPage'
+import ServerViewPage from './pages/ServerViewPage'
 import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -72,12 +73,13 @@ function App() {
                 <RemoteProfilesProvider>
                   <ProfileProvider>
                     <WebRTCProvider>
-                      <HousesProvider>
+                      <ServersProvider>
                         <SidebarWidthProvider>
-                          <ActiveHouseProvider>
-                            <HouseSyncBootstrap />
+                          <ActiveServerProvider>
+                            <ServerSyncBootstrap />
                             <Router>
                     <div className="flex flex-col h-screen overflow-hidden border-2 border-foreground/20 relative">
+                      <AppUpdater />
                       <TitleBar />
                       <div className="flex-1 overflow-auto min-h-0">
                         <Routes>
@@ -86,18 +88,18 @@ function App() {
                           <Route path="/identity/setup" element={<IdentitySetupPage />} />
                           <Route path="/identity/restore" element={<IdentityRestorePage />} />
                           <Route
-                            path="/houses"
+                            path="/home"
                             element={
                               <ProtectedRoute>
-                                <HouseListPage />
+                                <ServerListPage />
                               </ProtectedRoute>
                             }
                           />
                           <Route
-                            path="/houses/:houseId"
+                            path="/home/:serverId"
                             element={
                               <ProtectedRoute>
-                                <HouseViewPage />
+                                <ServerViewPage />
                               </ProtectedRoute>
                             }
                           />
@@ -115,9 +117,9 @@ function App() {
                       <UserCardWrapper />
                     </div>
                             </Router>
-                          </ActiveHouseProvider>
+                          </ActiveServerProvider>
                         </SidebarWidthProvider>
-                      </HousesProvider>
+                      </ServersProvider>
                     </WebRTCProvider>
                   </ProfileProvider>
                 </RemoteProfilesProvider>

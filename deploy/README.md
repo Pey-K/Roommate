@@ -1,6 +1,6 @@
-# Roommate Signaling Server Deployment
+# Cordia Beacon Deployment
 
-This directory contains the deployment configuration for running the Roommate signaling server on your NAS or server.
+This directory contains the deployment configuration for running the Cordia beacon on your NAS or server.
 
 ## 🎯 Choose Your Installation Method
 
@@ -12,7 +12,7 @@ If you use Dockge, Portainer, or any Docker GUI manager, this is the easiest met
 
 **Quick version:**
 1. Open your Docker manager (Dockge/Portainer/etc.)
-2. Create new stack named `roommate-signaling`
+2. Create new stack named `cordia-beacon`
 3. Copy-paste the docker-compose.yml (see DOCKGE_SETUP.md)
 4. Deploy!
 
@@ -25,11 +25,11 @@ If you use Dockge, Portainer, or any Docker GUI manager, this is the easiest met
 SSH into your NAS/server and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/install.sh | bash
 ```
 
 That's it! The script will:
-- Create the installation directory at `/mnt/App/stacks/roommate-signaling`
+- Create the installation directory at `/mnt/App/stacks/cordia-beacon`
 - Download the configuration
 - Pull the Docker image
 - Start the server
@@ -37,17 +37,17 @@ That's it! The script will:
 
 **Custom installation directory:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/install.sh | INSTALL_DIR=/your/custom/path bash
+curl -fsSL https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/install.sh | INSTALL_DIR=/your/custom/path bash
 ```
 
 ### Verify It's Running
 
 ```bash
-cd /mnt/App/stacks/roommate-signaling
+cd /mnt/App/stacks/cordia-beacon
 docker-compose logs -f signaling-server
 ```
 
-You should see: `Signaling server listening on ws://127.0.0.1:9001`
+You should see: `Beacon listening on ws://127.0.0.1:9001`
 
 ---
 
@@ -58,9 +58,9 @@ If you prefer manual installation:
 ### Step 1: Download and Start
 
 ```bash
-mkdir -p /mnt/App/stacks/roommate-signaling
-cd /mnt/App/stacks/roommate-signaling
-wget https://raw.githubusercontent.com/Pey-K/Roommate/main/deploy/docker-compose.yml
+mkdir -p /mnt/App/stacks/cordia-beacon
+cd /mnt/App/stacks/cordia-beacon
+wget https://raw.githubusercontent.com/Pey-K/Cordia/main/deploy/docker-compose.yml
 docker-compose pull
 docker-compose up -d
 ```
@@ -131,9 +131,9 @@ docker-compose logs -f signaling-server
 docker-compose ps
 ```
 
-## Accessing from Roommate App
+## Accessing from Cordia App
 
-Once the server is running on your NAS, you'll need to update the Roommate app to use your NAS IP address instead of localhost.
+Once the server is running on your NAS, you'll need to update the Cordia app to use your NAS IP address instead of localhost.
 
 **Example**: If your NAS IP is `192.168.1.100`:
 
@@ -144,7 +144,7 @@ pub fn get_default_signaling_url() -> String {
 }
 ```
 
-Then rebuild the Roommate app.
+Then rebuild the Cordia app.
 
 ## Troubleshooting
 

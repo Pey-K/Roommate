@@ -17,7 +17,7 @@ function SplashPage() {
     // Session state is the ONLY authority for login
     if (currentAccountId && identity) {
       // Active session with identity loaded - go to main app
-        navigate('/houses')
+        navigate('/home')
     } else if (accounts.length > 0) {
       // Accounts exist but no active session - show account selector (login screen)
       navigate('/account/select')

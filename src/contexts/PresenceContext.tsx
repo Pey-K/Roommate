@@ -22,6 +22,10 @@ interface PresenceContextType {
 
 const PresenceContext = createContext<PresenceContextType | null>(null)
 
+const DEBUG_LOG = (payload: Record<string, unknown>) => {
+  fetch('http://127.0.0.1:7242/ingest/dec2554b-ad65-4161-ac35-883cb77815a4', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, timestamp: Date.now(), sessionId: 'debug-session' }) }).catch(() => {})
+}
+
 export function PresenceProvider({ children }: { children: ReactNode }) {
   const [byHouse, setByHouse] = useState<PresenceByHouse>({})
 
@@ -36,6 +40,9 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   }
 
   const applyUpdate: PresenceContextType['applyUpdate'] = (signingPubkey, userId, online, activeSigningPubkey) => {
+    // #region agent log
+    DEBUG_LOG({ location: 'PresenceContext.tsx:applyUpdate', message: 'applyUpdate called', data: { userId, online, spk: signingPubkey.slice(0, 8) }, hypothesisId: 'H2d' })
+    // #endregion
     setByHouse((prev) => {
       const house = prev[signingPubkey] || {}
       if (!online) {

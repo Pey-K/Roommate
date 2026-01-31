@@ -26,7 +26,7 @@ function AccountSelectPage() {
       // Switch to the account (sets session AND loads identity)
       // AccountContext handles everything
       await switchToAccount(accountId)
-      navigate('/houses')
+      navigate('/home')
     } catch (error) {
       console.error('Failed to select account:', error)
       alert('Failed to select account. Please try again.')

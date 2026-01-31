@@ -1,27 +1,27 @@
-# Signaling Server Setup Guide
+# Beacon Setup Guide
 
-This guide will help you set up your own signaling server. **Note:** Roommate comes with a default signaling server at `signal.pkcollection.net` that you can use immediately - no setup required!
+This guide will help you set up your own beacon. **Note:** Cordia comes with a default beacon at `signal.pkcollection.net` that you can use immediately - no setup required!
 
 You only need to follow this guide if you want to:
-- Self-host your own signaling server
+- Self-host your own beacon
 - Run a local development server
-- Have full control over your signaling infrastructure
+- Have full control over your beacon infrastructure
 
-## Default Server
+## Default Beacon
 
-Roommate includes a default signaling server at **`signal.pkcollection.net`** that works out of the box. You can:
+Cordia includes a default beacon at **`signal.pkcollection.net`** that works out of the box. You can:
 - Use it immediately with no configuration
 - Change it at any time in Settings → Connections
-- Use different servers for different accounts
+- Use different beacons for different accounts
 
 ## Privacy & Security
 
-**Important:** The signaling server cannot read your user data. All house data, room content, and messages are encrypted and stored locally on your device. The signaling server only facilitates:
+**Important:** The beacon cannot read your user data. All server data, chat content, and messages are encrypted and stored locally on your device. The beacon only facilitates:
 - Peer discovery (finding other users)
-- Room metadata (room names, member lists)
+- Chat metadata (chat names, member lists)
 - Presence tracking (who's online/active)
 
-Your actual voice communication is direct peer-to-peer (WebRTC) and never passes through the signaling server. Your house keys, encrypted data, and identity are stored locally and never sent to the server.
+Your actual voice communication is direct peer-to-peer (WebRTC) and never passes through the beacon. Your server keys, encrypted data, and identity are stored locally and never sent to the beacon.
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ Your actual voice communication is direct peer-to-peer (WebRTC) and never passes
 
 ## Quick Start
 
-### Start the Signaling Server
+### Start the Beacon
 
 ```bash
 # From the project root directory
@@ -40,8 +40,8 @@ docker-compose up -d
 ```
 
 This will:
-- Build the signaling server Docker image
-- Start the server on `ws://localhost:9001`
+- Build the beacon Docker image
+- Start the beacon on `ws://localhost:9001`
 - Run it in the background with automatic restart
 
 **Verify it's running:**
@@ -49,35 +49,35 @@ This will:
 docker-compose ps
 ```
 
-You should see `roommate-signaling` with status "Up".
+You should see `cordia-beacon` with status "Up".
 
 **View logs:**
 ```bash
-docker-compose logs -f signaling-server
+docker-compose logs -f cordia-beacon
 ```
 
-You should see: `Signaling server listening on ws://127.0.0.1:9001`
+You should see: `Beacon listening on ws://127.0.0.1:9001`
 
 ## Connection Status in App
 
 Once the app is running, check the connection status:
 
-- **🟢 Green "Connected"**: Signaling server is online - full features available
+- **🟢 Green "Connected"**: Beacon is online - full features available
 - **🟡 Yellow "Checking"**: Checking connection status
-- **🔴 Red "Offline"**: Signaling server offline - limited to single room per house
+- **🔴 Red "Offline"**: Beacon offline - limited to single chat per server
 
-**Default Server:** The app connects to `signal.pkcollection.net` by default. You can change this in Settings → Connections at any time. Each account can use a different server.
+**Default Beacon:** The app connects to `signal.pkcollection.net` by default. You can change this in Settings → Connections at any time. Each account can use a different beacon.
 
-## Managing the Server
+## Managing the Beacon
 
-### Stop the server
+### Stop the beacon
 ```bash
 docker-compose down
 ```
 
-### Restart the server
+### Restart the beacon
 ```bash
-docker-compose restart signaling-server
+docker-compose restart cordia-beacon
 ```
 
 ### Rebuild after code changes
@@ -87,19 +87,19 @@ docker-compose up -d --build
 
 ### View real-time logs
 ```bash
-docker-compose logs -f signaling-server
+docker-compose logs -f cordia-beacon
 ```
 
 ## Alternative: Run Without Docker (Development)
 
-If you prefer to run the signaling server directly with Rust:
+If you prefer to run the beacon directly with Rust:
 
 ```bash
-# Terminal 1 - Signaling Server
+# Terminal 1 - Beacon
 cd signaling-server
 RUST_LOG=info cargo run
 
-# Terminal 2 - Roommate App (from project root)
+# Terminal 2 - Cordia App (from project root)
 npm run tauri dev
 ```
 
@@ -129,7 +129,7 @@ The server runs on port `9001` by default. To change it:
 
 ### Storage Location
 
-The signaling server stores data in `/mnt/App/apps/signal` on the host machine (for production deployments). For local development, data is stored in Docker volumes.
+The beacon stores data in `/mnt/App/apps/signal` on the host machine (for production deployments). For local development, data is stored in Docker volumes.
 
 ### User Permissions
 
@@ -181,7 +181,7 @@ lsof -ti:9001 | xargs kill -9
    ```bash
    docker-compose ps
    ```
-   Should show `roommate-signaling` as "Up"
+   Should show `cordia-beacon` as "Up"
 
 2. **Check server logs:**
    ```bash
@@ -190,7 +190,7 @@ lsof -ti:9001 | xargs kill -9
    Look for "Signaling server listening on ws://127.0.0.1:9001"
 
 3. **Restart the app:**
-   - Close Roommate completely
+   - Close Cordia completely
    - Restart with `npm run tauri dev`
    - Check the connection indicator after app loads
 
@@ -214,7 +214,7 @@ docker-compose up -d
 - House invites and member management
 
 ### ⚠️ Without Signaling Server (Offline Mode)
-- **Limited**: Single default room per house only
+- **Limited**: Single default chat per server only
 - Room creation disabled
 - Direct P2P connections still work
 - Manual peer discovery required

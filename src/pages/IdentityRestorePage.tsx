@@ -78,7 +78,7 @@ function IdentityRestorePage() {
       }
       
       // Reload to initialize AccountContext with new session
-      window.location.href = '/houses'
+      window.location.href = '/home'
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to import identity. The file may be corrupted or invalid.')
       setIsImporting(false)

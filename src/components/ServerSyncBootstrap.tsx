@@ -6,15 +6,20 @@ import { useVoicePresence } from '../contexts/VoicePresenceContext'
 import { useSignaling } from '../contexts/SignalingContext'
 import { useProfile } from '../contexts/ProfileContext'
 import { useRemoteProfiles } from '../contexts/RemoteProfilesContext'
-import { fetchAndImportHouseHintOpaque, listHouses } from '../lib/tauri'
+import { fetchAndImportServerHintOpaque, listServers } from '../lib/tauri'
+import { requestMicrophonePermission } from '../lib/audio'
+
+const DEBUG_LOG = (payload: Record<string, unknown>) => {
+  fetch('http://127.0.0.1:7242/ingest/dec2554b-ad65-4161-ac35-883cb77815a4', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, timestamp: Date.now(), sessionId: 'debug-session' }) }).catch(() => {})
+}
 
 /**
- * Pull latest house metadata (members/rooms) from the signaling server after login.
+ * Pull latest server metadata (members/chats) from the beacon after login.
  *
- * This is a minimal “sync-on-login” step so creators see new members even if they
- * haven't opened the house yet. It intentionally only updates metadata (no secrets).
+ * This is a minimal "sync-on-login" step so creators see new members even if they
+ * haven't opened the server yet. It intentionally only updates metadata (no secrets).
  */
-export function HouseSyncBootstrap() {
+export function ServerSyncBootstrap() {
   const { sessionLoaded, currentAccountId } = useAccount()
   const { identity } = useIdentity()
   const presence = usePresence()
@@ -23,13 +28,21 @@ export function HouseSyncBootstrap() {
   const { profile } = useProfile()
   const remoteProfiles = useRemoteProfiles()
   const ranForSessionRef = useRef<string | null>(null)
+  const micPermissionRequestedRef = useRef(false)
   const isSyncingRef = useRef(false)
   const wsRef = useRef<WebSocket | null>(null)
   const subscribedSigningPubkeysRef = useRef<Set<string>>(new Set())
   const activeSigningPubkeyRef = useRef<string | null>(null)
 
+  // Request microphone permission once when user is logged in so the prompt appears in one place
   useEffect(() => {
-    // Only run when logged in + signaling is reachable
+    if (!currentAccountId || micPermissionRequestedRef.current) return
+    micPermissionRequestedRef.current = true
+    requestMicrophonePermission()
+  }, [currentAccountId])
+
+  useEffect(() => {
+    // Only run when logged in + beacon is reachable
     if (!sessionLoaded || !currentAccountId) return
     if (signalingStatus !== 'connected' || !signalingUrl) return
 
@@ -43,19 +56,19 @@ export function HouseSyncBootstrap() {
       if (isSyncingRef.current) return
       isSyncingRef.current = true
       try {
-        const houses = await listHouses()
-        for (const h of houses) {
+        const servers = await listServers()
+        for (const s of servers) {
           if (cancelled) return
           try {
-            await fetchAndImportHouseHintOpaque(signalingUrl, h.signing_pubkey)
+            await fetchAndImportServerHintOpaque(signalingUrl, s.signing_pubkey)
           } catch (e) {
-            console.warn('[HouseSyncBootstrap] Failed to sync house hint:', e)
+            console.warn('[ServerSyncBootstrap] Failed to sync server hint:', e)
           }
         }
 
-        window.dispatchEvent(new Event('roommate:houses-updated'))
+        window.dispatchEvent(new Event('cordia:servers-updated'))
       } catch (e) {
-        console.warn('[HouseSyncBootstrap] Failed to list houses for sync:', e)
+        console.warn('[ServerSyncBootstrap] Failed to list servers for sync:', e)
       } finally {
         isSyncingRef.current = false
       }
@@ -84,8 +97,8 @@ export function HouseSyncBootstrap() {
         if (!identity?.user_id) return
         if (ws.readyState !== WebSocket.OPEN) return
         try {
-          const houses = await listHouses()
-          const signingPubkeys = houses.map(h => h.signing_pubkey)
+          const servers = await listServers()
+          const signingPubkeys = servers.map(s => s.signing_pubkey)
           const dn =
             (override?.display_name ?? profile.display_name) || identity.display_name
           const show = Boolean(override?.show_real_name ?? profile.show_real_name)
@@ -110,14 +123,14 @@ export function HouseSyncBootstrap() {
       const sendProfileHello = async () => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return
         try {
-          const houses = await listHouses()
-          for (const h of houses) {
-            const ids = Array.from(new Set(h.members.map(m => m.user_id).filter(Boolean)))
+          const servers = await listServers()
+          for (const s of servers) {
+            const ids = Array.from(new Set(s.members.map(m => m.user_id).filter(Boolean)))
             if (ids.length === 0) continue
             ws.send(
               JSON.stringify({
                 type: 'ProfileHello',
-                signing_pubkey: h.signing_pubkey,
+                signing_pubkey: s.signing_pubkey,
                 user_ids: ids,
               })
             )
@@ -127,12 +140,15 @@ export function HouseSyncBootstrap() {
         }
       }
 
-      const sendPresenceHello = async () => {
+      const sendPresenceHello = async (fromLabel: string) => {
         if (!identity?.user_id) return
         if (ws.readyState !== WebSocket.OPEN) return
+        // #region agent log
+        DEBUG_LOG({ location: 'ServerSyncBootstrap.tsx:sendPresenceHello', message: 'sendPresenceHello invoked', data: { from: fromLabel, readyState: ws.readyState }, hypothesisId: 'H2a' })
+        // #endregion
         try {
-          const houses = await listHouses()
-          const signingPubkeys = houses.map(h => h.signing_pubkey)
+          const servers = await listServers()
+          const signingPubkeys = servers.map(s => s.signing_pubkey)
           ws.send(
             JSON.stringify({
               type: 'PresenceHello',
@@ -142,60 +158,60 @@ export function HouseSyncBootstrap() {
             })
           )
         } catch (e) {
-          console.warn('[HouseSyncBootstrap] Failed to send presence hello:', e)
+          console.warn('[ServerSyncBootstrap] Failed to send presence hello:', e)
         }
       }
 
-      const subscribeMissingHouses = async () => {
+      const subscribeMissingServers = async () => {
         if (ws.readyState !== WebSocket.OPEN) return
         try {
-          const houses = await listHouses()
+          const servers = await listServers()
           const nextSet = new Set(subscribedSigningPubkeysRef.current)
-          for (const h of houses) {
-            if (nextSet.has(h.signing_pubkey)) continue
-            nextSet.add(h.signing_pubkey)
+          for (const s of servers) {
+            if (nextSet.has(s.signing_pubkey)) continue
+            nextSet.add(s.signing_pubkey)
             ws.send(
               JSON.stringify({
                 type: 'Register',
-                house_id: h.id,
-                peer_id: `house-sync:${currentAccountId}:${h.id}`,
-                signing_pubkey: h.signing_pubkey,
+                house_id: s.id,
+                peer_id: `server-sync:${currentAccountId}:${s.id}`,
+                signing_pubkey: s.signing_pubkey,
               })
             )
           }
           subscribedSigningPubkeysRef.current = nextSet
-          // Presence set may have changed (new house joined/imported)
-          sendPresenceHello()
+          // Presence set may have changed (new server joined/imported)
+          sendPresenceHello('subscribeMissingServers')
           sendProfileAnnounce()
           sendProfileHello()
         } catch (e) {
-          console.warn('[HouseSyncBootstrap] Failed to resubscribe after house list change:', e)
+          console.warn('[ServerSyncBootstrap] Failed to resubscribe after server list change:', e)
         }
       }
 
       ws.onopen = async () => {
         try {
-          const houses = await listHouses()
+          const servers = await listServers()
           const nextSet = new Set<string>()
-          for (const h of houses) {
-            nextSet.add(h.signing_pubkey)
-            // Register subscription for this signing_pubkey (server uses it for HouseHintUpdated broadcasts)
+          for (const s of servers) {
+            nextSet.add(s.signing_pubkey)
+            // Register subscription for this signing_pubkey (beacon uses it for HouseHintUpdated broadcasts)
             ws.send(
               JSON.stringify({
                 type: 'Register',
-                house_id: h.id,
-                peer_id: `house-sync:${currentAccountId}:${h.id}`,
-                signing_pubkey: h.signing_pubkey,
+                house_id: s.id,
+                peer_id: `server-sync:${currentAccountId}:${s.id}`,
+                signing_pubkey: s.signing_pubkey,
               })
             )
           }
           subscribedSigningPubkeysRef.current = nextSet
           // Announce presence after subscriptions are set up
-          await sendPresenceHello()
+          await sendPresenceHello('ws.onopen')
           await sendProfileAnnounce()
           await sendProfileHello()
         } catch (e) {
-          console.warn('[HouseSyncBootstrap] Failed to subscribe houses over WS:', e)
+          console.warn('[ServerSyncBootstrap] Failed to subscribe servers over WS:', e)
         }
       }
 
@@ -204,40 +220,40 @@ export function HouseSyncBootstrap() {
           const msg = JSON.parse(event.data)
           if (msg.type === 'HouseHintUpdated') {
             const signingPubkey: string = msg.signing_pubkey
-            
-            // Try to import the hint - this will only succeed if we have the house locally
+
+            // Try to import the hint - this will only succeed if we have the server locally
             // (because we need the symmetric key to decrypt). If we don't have it, the import
             // will fail gracefully and we can ignore the update.
             try {
-              const imported = await fetchAndImportHouseHintOpaque(signalingUrl, signingPubkey)
-              
+              const imported = await fetchAndImportServerHintOpaque(signalingUrl, signingPubkey)
+
               // If we successfully imported, ensure we're subscribed for future updates
               if (imported && !subscribedSigningPubkeysRef.current.has(signingPubkey)) {
                 subscribedSigningPubkeysRef.current.add(signingPubkey)
                 if (ws.readyState === WebSocket.OPEN) {
-                  // Find the house ID to register
-                  const houses = await listHouses().catch(() => [])
-                  const house = houses.find(h => h.signing_pubkey === signingPubkey)
-                  if (house) {
+                  // Find the server ID to register
+                  const servers = await listServers().catch(() => [])
+                  const server = servers.find(s => s.signing_pubkey === signingPubkey)
+                  if (server) {
                     ws.send(
                       JSON.stringify({
                         type: 'Register',
-                        house_id: house.id,
-                        peer_id: `house-sync:${currentAccountId}:${house.id}`,
+                        house_id: server.id,
+                        peer_id: `server-sync:${currentAccountId}:${server.id}`,
                         signing_pubkey: signingPubkey,
                       })
                     )
                   }
                 }
               }
-              
+
               // Only dispatch event if we actually imported something
               if (imported) {
-                window.dispatchEvent(new Event('roommate:houses-updated'))
+                window.dispatchEvent(new Event('cordia:servers-updated'))
               }
             } catch (e) {
-              // House doesn't exist locally or can't decrypt - ignore silently
-              // This is expected for houses we're not a member of
+              // Server doesn't exist locally or can't decrypt - ignore silently
+              // This is expected for servers we're not a member of
             }
             return
           }
@@ -254,6 +270,9 @@ export function HouseSyncBootstrap() {
             const userId: string = msg.user_id
             const online: boolean = msg.online
             const active: string | null | undefined = msg.active_signing_pubkey
+            // #region agent log
+            DEBUG_LOG({ location: 'ServerSyncBootstrap.tsx:PresenceUpdate', message: 'PresenceUpdate received', data: { userId, online, spk: spk.slice(0, 8) }, hypothesisId: 'H2c' })
+            // #endregion
             presence.applyUpdate(spk, userId, online, active ?? null)
             return
           }
@@ -297,7 +316,7 @@ export function HouseSyncBootstrap() {
       }
 
       ws.onerror = (e) => {
-        console.warn('[HouseSyncBootstrap] WS error:', e)
+        console.warn('[ServerSyncBootstrap] WS error:', e)
       }
 
       ws.onclose = () => {
@@ -311,8 +330,8 @@ export function HouseSyncBootstrap() {
         }
       }
 
-      // If a house is removed locally, stop applying WS updates for it immediately (prevents re-import ghosts).
-      const onHouseRemoved = (ev: Event) => {
+      // If a server is removed locally, stop applying WS updates for it immediately (prevents re-import ghosts).
+      const onServerRemoved = (ev: Event) => {
         const detail = (ev as CustomEvent<{ signing_pubkey?: string }>).detail
         const spk = detail?.signing_pubkey
         if (!spk) return
@@ -321,12 +340,12 @@ export function HouseSyncBootstrap() {
         subscribedSigningPubkeysRef.current = next
       }
 
-      // If houses are added (join/import), subscribe without reconnecting.
-      const onHousesUpdated = () => {
-        subscribeMissingHouses()
+      // If servers are added (join/import), subscribe without reconnecting.
+      const onServersUpdated = () => {
+        subscribeMissingServers()
       }
 
-      const onActiveHouseChanged = (ev: Event) => {
+      const onActiveServerChanged = (ev: Event) => {
         const detail = (ev as CustomEvent<{ signing_pubkey?: string | null }>).detail
         const next = detail?.signing_pubkey ?? null
         activeSigningPubkeyRef.current = next
@@ -341,8 +360,8 @@ export function HouseSyncBootstrap() {
         )
       }
 
-      window.addEventListener('roommate:house-removed', onHouseRemoved)
-      window.addEventListener('roommate:houses-updated', onHousesUpdated)
+      window.addEventListener('cordia:server-removed', onServerRemoved)
+      window.addEventListener('cordia:servers-updated', onServersUpdated)
       const onProfileUpdated = (ev: Event) => {
         const detail = (ev as CustomEvent<any>).detail
         if (detail && typeof detail === 'object') {
@@ -356,16 +375,18 @@ export function HouseSyncBootstrap() {
           // Fallback: send whatever the current context has (may be slightly delayed)
           setTimeout(() => sendProfileAnnounce(), 0)
         }
+        // Re-announce presence so other clients see us (fixes gray dot after reconnect; also on settings save)
+        sendPresenceHello('profile-updated')
       }
       window.addEventListener('roommate:profile-updated', onProfileUpdated as any)
-      window.addEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
+      window.addEventListener('cordia:active-server-changed', onActiveServerChanged as any)
 
       // Ensure listeners are cleaned up when the WS is replaced.
       const cleanupListeners = () => {
-        window.removeEventListener('roommate:house-removed', onHouseRemoved)
-        window.removeEventListener('roommate:houses-updated', onHousesUpdated)
+        window.removeEventListener('cordia:server-removed', onServerRemoved)
+        window.removeEventListener('cordia:servers-updated', onServersUpdated)
         window.removeEventListener('roommate:profile-updated', onProfileUpdated as any)
-        window.removeEventListener('roommate:active-house-changed', onActiveHouseChanged as any)
+        window.removeEventListener('cordia:active-server-changed', onActiveServerChanged as any)
       }
       ws.addEventListener('close', cleanupListeners, { once: true })
       ws.addEventListener('error', cleanupListeners, { once: true })
@@ -384,4 +405,3 @@ export function HouseSyncBootstrap() {
 
   return null
 }
-

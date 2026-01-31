@@ -52,8 +52,8 @@ When reporting a vulnerability, please include:
 
 ### Network Security
 
-- **Use HTTPS/WSS**: When deploying signaling servers, use secure connections (wss://)
-- **Firewall Configuration**: Only expose necessary ports (9001 for signaling)
+- **Use HTTPS/WSS**: When deploying beacons, use secure connections (wss://)
+- **Firewall Configuration**: Only expose necessary ports (9001 for beacon)
 - **VPN Usage**: Consider using a VPN for additional privacy
 - **Local Network**: Be aware that P2P connections may expose your local IP
 
@@ -62,13 +62,13 @@ When reporting a vulnerability, please include:
 - **Local Storage**: Your identity and house keys are stored locally
 - **Encryption**: House data is encrypted with symmetric keys
 - **Data Directory**: Be aware of where your data is stored
-  - Windows: `%APPDATA%\roommate\`
-  - macOS: `~/Library/Application Support/roommate/`
-  - Linux: `~/.config/roommate/`
+  - Windows: `%APPDATA%\Cordia\`
+  - macOS: `~/Library/Application Support/Cordia/`
+  - Linux: `~/.config/cordia/`
 
 ### Signaling Server Security
 
-If you're running your own signaling server:
+If you're running your own beacon:
 
 - **Keep Updated**: Regularly update to the latest version
 - **Access Control**: Consider implementing authentication for production
@@ -80,23 +80,23 @@ If you're running your own signaling server:
 
 ### Current Limitations
 
-- **No Authentication**: The signaling server currently has no authentication
+- **No Authentication**: The beacon currently has no authentication
 - **Public Invite Codes**: Invite codes are not cryptographically secure (they're opaque but predictable)
 - **IP Exposure**: P2P connections may expose your local IP address to peers
-- **No Message Encryption**: Voice is P2P but signaling messages are not encrypted (future: E2E encryption)
+- **No Message Encryption**: Voice is P2P but beacon messages are not encrypted (future: E2E encryption)
 
 ### Privacy Protections
 
-- **Server Cannot Read Data**: The signaling server cannot read your user data. All house data, room content, and messages are encrypted and stored locally on your device
-- **P2P Voice**: Voice communication is direct peer-to-peer (WebRTC) and never passes through the signaling server
+- **Server Cannot Read Data**: The beacon cannot read your user data. All house data, room content, and messages are encrypted and stored locally on your device
+- **P2P Voice**: Voice communication is direct peer-to-peer (WebRTC) and never passes through the beacon
 - **Local Storage**: Your identity, house keys, and encrypted data are stored locally and never sent to the server
-- **Server Role**: The signaling server only facilitates peer discovery, room metadata, and presence tracking - it does not have access to your encrypted content
+- **Server Role**: The beacon only facilitates peer discovery, room metadata, and presence tracking - it does not have access to your encrypted content
 
 ### Future Security Enhancements
 
-- End-to-end encrypted signaling messages
+- End-to-end encrypted beacon messages
 - Cryptographically secure invite codes
-- Authentication for signaling servers
+- Authentication for beacons
 - IP address privacy improvements
 - Message authentication and integrity
 

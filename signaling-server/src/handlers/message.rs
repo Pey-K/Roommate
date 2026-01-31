@@ -29,7 +29,7 @@ pub async fn handle_message(
             signaling.peer_senders.insert(peer_id.clone(), sender.clone());
             drop(signaling);
 
-            info!("Registered peer {} in house {}", peer_id, house_id);
+            info!("Registered peer {} in server {}", peer_id, house_id);
 
             let response = SignalingMessage::Registered {
                 peer_id: peer_id.clone(),
@@ -359,7 +359,7 @@ pub async fn handle_message(
         // === Voice Chat Messages ===
 
         SignalingMessage::VoiceRegister { house_id, room_id, peer_id, user_id, signing_pubkey } => {
-            info!("Voice register: peer={} user={} house={} room={}", peer_id, user_id, house_id, room_id);
+            info!("Voice register: peer={} user={} server={} chat={}", peer_id, user_id, house_id, room_id);
 
             let peers = {
                 let mut signaling = state.signaling.lock().await;

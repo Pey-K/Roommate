@@ -2,44 +2,57 @@ import { useEffect, useState, useRef, type CSSProperties } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { ArrowLeft, Copy, Check, PhoneOff, Plus, Trash2, Phone } from 'lucide-react'
 import { Button } from '../components/ui/button'
-import { loadHouse, addRoom, removeRoom, type House, type Room, fetchAndImportHouseHintOpaque, publishHouseHintOpaque, createTemporaryInvite, revokeActiveInvite } from '../lib/tauri'
+import { loadServer, addRoom, removeChat, type Server, type Chat, fetchAndImportServerHintOpaque, publishServerHintOpaque, createTemporaryInvite, revokeActiveInvite } from '../lib/tauri'
 import { useIdentity } from '../contexts/IdentityContext'
 import { useWebRTC } from '../contexts/WebRTCContext'
 import { SignalingStatus } from '../components/SignalingStatus'
 import { useSignaling } from '../contexts/SignalingContext'
-import { usePresence } from '../contexts/PresenceContext'
+import { usePresence, type PresenceLevel } from '../contexts/PresenceContext'
 import { useVoicePresence } from '../contexts/VoicePresenceContext'
 import { useSpeaking } from '../contexts/SpeakingContext'
 import { useSidebarWidth } from '../contexts/SidebarWidthContext'
+import { useActiveServer } from '../contexts/ActiveServerContext'
 import { cn } from '../lib/utils'
 
-function HouseViewPage() {
-  const { houseId } = useParams<{ houseId: string }>()
+function ServerViewPage() {
+  const { serverId } = useParams<{ serverId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const { identity } = useIdentity()
   const { getLevel } = usePresence()
+  const { activeSigningPubkey } = useActiveServer()
   const voicePresence = useVoicePresence()
   const { isUserSpeaking } = useSpeaking()
   const { joinVoice, leaveVoice, isInVoice: webrtcIsInVoice, currentRoomId } = useWebRTC()
   const { signalingUrl, status: signalingStatus } = useSignaling()
   const { width, setWidth, resetWidth } = useSidebarWidth()
+
+  /** For the current user, presence is instant from local state; for others, use signaling data. */
+  const getMemberLevel = (signingPubkey: string, userId: string, isInVoiceForUser: boolean): PresenceLevel => {
+    if (identity?.user_id === userId) {
+      if (signalingStatus !== 'connected') return 'offline'
+      if (isInVoiceForUser) return 'in_call'
+      if (activeSigningPubkey === signingPubkey) return 'active'
+      return 'online'
+    }
+    return getLevel(signingPubkey, userId, isInVoiceForUser)
+  }
   const roomPaneResizeHandleRef = useRef<HTMLDivElement>(null)
   const [isResizing, setIsResizing] = useState(false)
-  // Try to get house from navigation state first (preloaded from neighborhood page)
-  const [house, setHouse] = useState<House | null>((location.state as { house?: House })?.house || null)
+  // Try to get server from navigation state first (preloaded from Home page)
+  const [server, setServer] = useState<Server | null>((location.state as { server?: Server })?.server || null)
   const [copiedInvite, setCopiedInvite] = useState(false)
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(null)
-  const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null)
-  const [showCreateRoomDialog, setShowCreateRoomDialog] = useState(false)
-  const [roomName, setRoomName] = useState('')
-  const [roomDescription, setRoomDescription] = useState('')
-  const [isCreatingRoom, setIsCreatingRoom] = useState(false)
+  const [currentChat, setCurrentChat] = useState<Chat | null>(null)
+  const [hoveredChatId, setHoveredChatId] = useState<string | null>(null)
+  const [showCreateChatDialog, setShowCreateChatDialog] = useState(false)
+  const [chatName, setChatName] = useState('')
+  const [chatDescription, setChatDescription] = useState('')
+  const [isCreatingChat, setIsCreatingChat] = useState(false)
   const [isCreatingInvite, setIsCreatingInvite] = useState(false)
   const [isRevokingInvite, setIsRevokingInvite] = useState(false)
-  const [deleteRoomTarget, setDeleteRoomTarget] = useState<Room | null>(null)
-  const [isDeletingRoom, setIsDeletingRoom] = useState(false)
-  const [deleteRoomError, setDeleteRoomError] = useState('')
+  const [deleteChatTarget, setDeleteChatTarget] = useState<Chat | null>(null)
+  const [isDeletingChat, setIsDeletingChat] = useState(false)
+  const [deleteChatError, setDeleteChatError] = useState('')
 
   const getInitials = (name: string) => {
     const cleaned = name.trim()
@@ -76,67 +89,67 @@ function HouseViewPage() {
     return <div className={`${sizeClass} ${cls} ring-2 ring-background`} />
   }
 
-  // Sync with signaling server in background (non-blocking)
+  // Sync with beacon in background (non-blocking)
   const syncWithSignalingServer = async () => {
-    if (!house || !houseId) return
-    
+    if (!server || !serverId) return
+
     // Only sync if signaling is connected
     if (signalingStatus === 'connected' && signalingUrl) {
       try {
-        const changed = await fetchAndImportHouseHintOpaque(signalingUrl, house.signing_pubkey)
+        const changed = await fetchAndImportServerHintOpaque(signalingUrl, server.signing_pubkey)
         if (changed) {
-          // Reload house data if it changed
-          const updatedHouse = await loadHouse(houseId)
-          setHouse(updatedHouse)
+          // Reload server data if it changed
+          const updatedServer = await loadServer(serverId)
+          setServer(updatedServer)
         }
       } catch (e) {
-        console.warn('[HouseView] Failed to refresh house hint:', e)
+        console.warn('[ServerView] Failed to refresh server hint:', e)
       }
     }
   }
 
   useEffect(() => {
-    if (!houseId) {
-      navigate('/houses')
+    if (!serverId) {
+      navigate('/home')
       return
     }
 
-    // If we don't have house data from navigation state, load it from disk
-    if (!house) {
-      loadHouseData()
+    // If we don't have server data from navigation state, load it from disk
+    if (!server) {
+      loadServerData()
     } else {
-      // We have house data, but still sync with signaling server in background
+      // We have server data, but still sync with beacon in background
       syncWithSignalingServer()
     }
 
-    // Reload house data when window gains focus (e.g., alt-tabbing between instances)
+    // Reload server data when window gains focus (e.g., alt-tabbing between instances)
     const handleFocus = () => {
-      console.log('[HouseView] Window focused - reloading house data')
-      loadHouseData()
+      console.log('[ServerView] Window focused - reloading server data')
+      loadServerData()
     }
 
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
-  }, [houseId])
+  }, [serverId])
 
-  // Sync with signaling server when house or signaling status changes (background, non-blocking)
+  // Sync with beacon when server or signaling status changes (background, non-blocking)
   useEffect(() => {
-    if (house && houseId) {
+    if (server && serverId) {
       syncWithSignalingServer()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [house?.signing_pubkey, signalingStatus, signalingUrl])
+  }, [server?.signing_pubkey, signalingStatus, signalingUrl])
 
-  // Presence: mark this house as "active" while the user is viewing it.
+  // Presence: mark this server as "active" while the user is viewing it.
   useEffect(() => {
-    if (!house?.signing_pubkey) return
+    if (!server?.signing_pubkey) return
     window.dispatchEvent(
-      new CustomEvent('roommate:active-house-changed', { detail: { signing_pubkey: house.signing_pubkey } })
+      new CustomEvent('cordia:active-server-changed', { detail: { signing_pubkey: server.signing_pubkey } })
     )
     return () => {
-      window.dispatchEvent(new CustomEvent('roommate:active-house-changed', { detail: { signing_pubkey: null } }))
+      window.dispatchEvent(new CustomEvent('cordia:active-server-changed', { detail: { signing_pubkey: null } }))
     }
-  }, [house?.signing_pubkey])
+  }, [server?.signing_pubkey])
 
   // Resize handler for room pane
   useEffect(() => {
@@ -173,24 +186,24 @@ function HouseViewPage() {
     resetWidth()
   }
 
-  const loadHouseData = async () => {
-    if (!houseId) return
+  const loadServerData = async () => {
+    if (!serverId) return
 
     try {
       // Load local first for fast UI
-      const loadedHouse = await loadHouse(houseId)
-      setHouse(loadedHouse)
+      const loadedServer = await loadServer(serverId)
+      setServer(loadedServer)
 
-      // Sync with signaling server in background (non-blocking)
+      // Sync with beacon in background (non-blocking)
       syncWithSignalingServer()
     } catch (error) {
-      console.error('Failed to load house:', error)
-      navigate('/houses')
+      console.error('Failed to load server:', error)
+      navigate('/home')
     }
   }
 
   const copyInviteCode = () => {
-    if (!house) return
+    if (!server) return
     const code = getActiveInviteCode()
     if (!code) return
     // Copy just the code. Join UI will use the user's configured signaling server under the hood.
@@ -200,9 +213,9 @@ function HouseViewPage() {
   }
 
   const getActiveInviteUri = (): string | null => {
-    if (!house) return null
-    const uri = house.active_invite_uri || null
-    const expiresAt = house.active_invite_expires_at ? new Date(house.active_invite_expires_at) : null
+    if (!server) return null
+    const uri = server.active_invite_uri || null
+    const expiresAt = server.active_invite_expires_at ? new Date(server.active_invite_expires_at) : null
     if (!uri) return null
     // If expires_at isn't present (older data), treat it as active until revoked.
     if (expiresAt && Date.now() > expiresAt.getTime()) return null
@@ -217,15 +230,15 @@ function HouseViewPage() {
   }
 
   const handleCreateInvite = async () => {
-    if (!houseId || !house) return
+    if (!serverId || !server) return
     if (signalingStatus !== 'connected' || !signalingUrl) return
 
     setIsCreatingInvite(true)
     try {
       // Default: unlimited uses until someone revokes.
-      await createTemporaryInvite(signalingUrl, houseId, 0)
-      const updated = await loadHouse(houseId)
-      setHouse(updated)
+      await createTemporaryInvite(signalingUrl, serverId, 0)
+      const updated = await loadServer(serverId)
+      setServer(updated)
     } catch (e) {
       console.warn('Failed to create invite:', e)
     } finally {
@@ -234,13 +247,13 @@ function HouseViewPage() {
   }
 
   const handleRevokeInvite = async () => {
-    if (!houseId) return
+    if (!serverId) return
     if (signalingStatus !== 'connected' || !signalingUrl) return
     setIsRevokingInvite(true)
     try {
-      await revokeActiveInvite(signalingUrl, houseId)
-      const updated = await loadHouse(houseId)
-      setHouse(updated)
+      await revokeActiveInvite(signalingUrl, serverId)
+      const updated = await loadServer(serverId)
+      setServer(updated)
     } catch (e) {
       console.warn('Failed to revoke invite:', e)
     } finally {
@@ -248,31 +261,31 @@ function HouseViewPage() {
     }
   }
 
-  // When house hints are imported via WS sync, refresh our local view.
+  // When server hints are imported via WS sync, refresh our local view.
   useEffect(() => {
-    if (!houseId) return
-    const onHousesUpdated = () => {
-      loadHouse(houseId).then(setHouse).catch(() => {})
+    if (!serverId) return
+    const onServersUpdated = () => {
+      loadServer(serverId).then(setServer).catch(() => {})
     }
-    window.addEventListener('roommate:houses-updated', onHousesUpdated)
-    return () => window.removeEventListener('roommate:houses-updated', onHousesUpdated)
-  }, [houseId])
+    window.addEventListener('cordia:servers-updated', onServersUpdated)
+    return () => window.removeEventListener('cordia:servers-updated', onServersUpdated)
+  }, [serverId])
 
-  const handleSelectRoom = (room: Room) => {
-    if (currentRoom?.id === room.id) return
+  const handleSelectChat = (chat: Chat) => {
+    if (currentChat?.id === chat.id) return
 
-    // Don't leave voice when just viewing a different room
-    // Voice will only be left if user explicitly clicks "Leave Voice" or joins a different room
-    setCurrentRoom(room)
-    console.log('Opened room:', room.name)
+    // Don't leave voice when just viewing a different chat
+    // Voice will only be left if user explicitly clicks "Leave Voice" or joins a different chat
+    setCurrentChat(chat)
+    console.log('Opened chat:', chat.name)
   }
 
-  const handleJoinVoice = async (room: Room) => {
-    if (!house || !identity) return
+  const handleJoinVoice = async (chat: Chat) => {
+    if (!server || !identity) return
 
     try {
-      await joinVoice(room.id, house.id, identity.user_id, house.signing_pubkey)
-      console.log('Joined voice in room:', room.name)
+      await joinVoice(chat.id, server.id, identity.user_id, server.signing_pubkey)
+      console.log('Joined voice in chat:', chat.name)
     } catch (error) {
       console.error('Failed to join voice:', error)
     }
@@ -283,76 +296,76 @@ function HouseViewPage() {
     console.log('Left voice')
   }
 
-  const handleCreateRoom = async () => {
-    if (!houseId || !roomName.trim()) return
+  const handleCreateChat = async () => {
+    if (!serverId || !chatName.trim()) return
 
-    setIsCreatingRoom(true)
+    setIsCreatingChat(true)
     try {
-      const updatedHouse = await addRoom(
-        houseId,
-        roomName.trim(),
-        roomDescription.trim() || null
+      const updatedServer = await addRoom(
+        serverId,
+        chatName.trim(),
+        chatDescription.trim() || null
       )
-      setHouse(updatedHouse)
+      setServer(updatedServer)
 
-      // Publish updated hint (rooms changed)
+      // Publish updated hint (chats changed)
       if (signalingStatus === 'connected' && signalingUrl) {
-        publishHouseHintOpaque(signalingUrl, updatedHouse.id).catch(e => console.warn('Failed to publish house hint:', e))
+        publishServerHintOpaque(signalingUrl, updatedServer.id).catch(e => console.warn('Failed to publish server hint:', e))
       }
 
-      setShowCreateRoomDialog(false)
-      setRoomName('')
-      setRoomDescription('')
+      setShowCreateChatDialog(false)
+      setChatName('')
+      setChatDescription('')
     } catch (error) {
-      console.error('Failed to create room:', error)
+      console.error('Failed to create chat:', error)
     } finally {
-      setIsCreatingRoom(false)
+      setIsCreatingChat(false)
     }
   }
 
-  const handleDeleteRoomClick = (e: React.MouseEvent, room: Room) => {
+  const handleDeleteChatClick = (e: React.MouseEvent, chat: Chat) => {
     e.stopPropagation()
-    setDeleteRoomError('')
-    setDeleteRoomTarget(room)
+    setDeleteChatError('')
+    setDeleteChatTarget(chat)
   }
 
-  const confirmDeleteRoom = async () => {
-    if (!houseId || !house || !deleteRoomTarget) return
-    setIsDeletingRoom(true)
-    setDeleteRoomError('')
+  const confirmDeleteChat = async () => {
+    if (!serverId || !server || !deleteChatTarget) return
+    setIsDeletingChat(true)
+    setDeleteChatError('')
 
     try {
-      // If we're currently in this room's voice channel, disconnect first.
-      if (currentRoom?.id === deleteRoomTarget.id && webrtcIsInVoice) {
+      // If we're currently in this chat's voice channel, disconnect first.
+      if (currentChat?.id === deleteChatTarget.id && webrtcIsInVoice) {
         leaveVoice()
       }
 
-      const updatedHouse = await removeRoom(houseId, deleteRoomTarget.id)
-      setHouse(updatedHouse)
+      const updatedServer = await removeChat(serverId, deleteChatTarget.id)
+      setServer(updatedServer)
 
-      if (currentRoom?.id === deleteRoomTarget.id) {
-        setCurrentRoom(null)
+      if (currentChat?.id === deleteChatTarget.id) {
+        setCurrentChat(null)
       }
 
-      // Publish updated hint (rooms changed) so WS subscribers refresh.
+      // Publish updated hint (chats changed) so WS subscribers refresh.
       if (signalingStatus === 'connected' && signalingUrl) {
-        publishHouseHintOpaque(signalingUrl, updatedHouse.id).catch(e => console.warn('Failed to publish house hint:', e))
+        publishServerHintOpaque(signalingUrl, updatedServer.id).catch(e => console.warn('Failed to publish server hint:', e))
       }
 
-      setDeleteRoomTarget(null)
-      window.dispatchEvent(new Event('roommate:houses-updated'))
+      setDeleteChatTarget(null)
+      window.dispatchEvent(new Event('cordia:servers-updated'))
     } catch (e) {
-      console.error('Failed to delete room:', e)
-      setDeleteRoomError('Failed to delete room. Please try again.')
+      console.error('Failed to delete chat:', e)
+      setDeleteChatError('Failed to delete chat. Please try again.')
     } finally {
-      setIsDeletingRoom(false)
+      setIsDeletingChat(false)
     }
   }
 
-  if (!house) {
+  if (!server) {
     return (
       <div className="h-full bg-background grid-pattern flex items-center justify-center">
-        <p className="text-muted-foreground text-sm font-light">House not found</p>
+        <p className="text-muted-foreground text-sm font-light">Server not found</p>
       </div>
     )
   }
@@ -363,13 +376,13 @@ function HouseViewPage() {
         <div className="w-full flex h-16 items-center justify-between px-6 min-w-0">
           <div className="flex items-center gap-4 min-w-0 flex-1">
             <button
-              onClick={() => navigate('/houses')}
+              onClick={() => navigate('/home')}
               className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="w-px h-6 bg-foreground/20 shrink-0"></div>
-            <h1 className="text-sm font-light tracking-wider uppercase truncate min-w-0">{house.name}</h1>
+            <h1 className="text-sm font-light tracking-wider uppercase truncate min-w-0">{server.name}</h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <SignalingStatus />
@@ -394,37 +407,37 @@ function HouseViewPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between px-2">
                 <h2 className="text-xs font-light tracking-wider uppercase text-muted-foreground">
-                  Rooms
+                  Chats
                 </h2>
                 <button
-                  onClick={() => setShowCreateRoomDialog(true)}
+                  onClick={() => setShowCreateChatDialog(true)}
                   className="p-1 rounded transition-colors hover:bg-accent/50 text-muted-foreground hover:text-foreground"
-                  title="Create new room"
+                  title="Create new chat"
                 >
                   <Plus className="h-3 w-3" />
                 </button>
               </div>
               <div className="space-y-1">
-                {house.rooms.map((room) => {
-                  const voiceParticipants = voicePresence.getVoiceParticipants(house.signing_pubkey, room.id)
-                  // Include self if in voice in this room
-                  const allParticipants = identity && webrtcIsInVoice && currentRoomId === room.id && !voiceParticipants.includes(identity.user_id)
+                {server.rooms.map((chat) => {
+                  const voiceParticipants = voicePresence.getVoiceParticipants(server.signing_pubkey, chat.id)
+                  // Include self if in voice in this chat
+                  const allParticipants = identity && webrtcIsInVoice && currentRoomId === chat.id && !voiceParticipants.includes(identity.user_id)
                     ? [identity.user_id, ...voiceParticipants]
                     : voiceParticipants
-                  const isSelected = currentRoom?.id === room.id
+                  const isSelected = currentChat?.id === chat.id
 
                   return (
-                    <div key={room.id}>
+                    <div key={chat.id}>
                       <div
-                        onClick={() => handleSelectRoom(room)}
+                        onClick={() => handleSelectChat(chat)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault()
-                            handleSelectRoom(room)
+                            handleSelectChat(chat)
                           }
                         }}
-                        onMouseEnter={() => setHoveredRoomId(room.id)}
-                        onMouseLeave={() => setHoveredRoomId(null)}
+                        onMouseEnter={() => setHoveredChatId(chat.id)}
+                        onMouseLeave={() => setHoveredChatId(null)}
                         role="button"
                         tabIndex={0}
                         className={`w-full px-3 py-2 rounded-md transition-colors text-left group min-w-0 overflow-hidden ${
@@ -436,13 +449,13 @@ function HouseViewPage() {
                         <div className="flex items-center justify-between min-w-0">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <span className="text-lg shrink-0">#</span>
-                            <span className="text-sm font-light truncate">{room.name}</span>
+                            <span className="text-sm font-light truncate">{chat.name}</span>
                           </div>
                           {(() => {
-                            const inThisRoom = webrtcIsInVoice && currentRoomId === room.id
-                            const showJoin = !inThisRoom && hoveredRoomId === room.id
-                            const isHovered = hoveredRoomId === room.id
-                            const showIcons = inThisRoom || showJoin || isHovered
+                            const inThisChat = webrtcIsInVoice && currentRoomId === chat.id
+                            const showJoin = !inThisChat && hoveredChatId === chat.id
+                            const isHovered = hoveredChatId === chat.id
+                            const showIcons = inThisChat || showJoin || isHovered
                             return (
                               <div className={`flex items-center gap-2 transition-all duration-200 ${
                                 showIcons ? 'w-auto' : 'w-0 overflow-hidden'
@@ -450,13 +463,13 @@ function HouseViewPage() {
                                 {/* Phone icon for joining/leaving voice - visible when in call, hover-only otherwise */}
                                 <button
                                   type="button"
-                                  title={inThisRoom ? "Leave voice" : "Join voice"}
+                                  title={inThisChat ? "Leave voice" : "Join voice"}
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    if (inThisRoom) {
+                                    if (inThisChat) {
                                       handleLeaveVoice()
                                     } else {
-                                      handleJoinVoice(room)
+                                      handleJoinVoice(chat)
                                     }
                                   }}
                                   className={`p-1 rounded transition-colors shrink-0 ${
@@ -465,12 +478,12 @@ function HouseViewPage() {
                                       : 'hover:bg-accent/70 text-muted-foreground hover:text-foreground'
                                   }`}
                                 >
-                                  {inThisRoom ? <PhoneOff className="h-3 w-3" /> : <Phone className="h-3 w-3" />}
+                                  {inThisChat ? <PhoneOff className="h-3 w-3" /> : <Phone className="h-3 w-3" />}
                                 </button>
                                 <button
                                   type="button"
-                                  title="Delete room"
-                                  onClick={(e) => handleDeleteRoomClick(e, room)}
+                                  title="Delete chat"
+                                  onClick={(e) => handleDeleteChatClick(e, chat)}
                                   className={`p-1 rounded transition-colors shrink-0 ${
                                     isSelected
                                       ? 'hover:bg-primary-foreground/10 text-primary-foreground/80 hover:text-primary-foreground'
@@ -489,16 +502,16 @@ function HouseViewPage() {
                       {allParticipants.length > 0 && (
                         <div className={`px-3 pb-2 ${isSelected ? 'pt-1' : 'pt-0'}`}>
                           {isSelected ? (
-                            // Expanded view for selected room
+                            // Expanded view for selected chat
                             <div className="space-y-1">
                               {allParticipants.map((userId) => {
-                                const member = house.members.find(m => m.user_id === userId)
+                                const member = server.members.find(m => m.user_id === userId)
                                 const displayName = member?.display_name || (userId === identity?.user_id ? identity.display_name : `User ${userId.slice(0, 8)}`)
                                 const isSelf = userId === identity?.user_id
-                                const level = getLevel(
-                                  house.signing_pubkey,
+                                const level = getMemberLevel(
+                                  server.signing_pubkey,
                                   userId,
-                                  voicePresence.isUserInVoice(house.signing_pubkey, userId)
+                                  voicePresence.isUserInVoice(server.signing_pubkey, userId)
                                 )
                                 const isSpeaking = isUserSpeaking(userId)
 
@@ -527,7 +540,7 @@ function HouseViewPage() {
                               })}
                             </div>
                           ) : (
-                            // Stacked view for non-selected rooms
+                            // Stacked view for non-selected chats
                             (() => {
                               const maxVisible = 6
                               const avatarPx = 20 // h-5/w-5
@@ -543,12 +556,12 @@ function HouseViewPage() {
                                   style={{ width: widthPx }}
                                 >
                                   {visible.map((userId, i) => {
-                                    const member = house.members.find(m => m.user_id === userId)
+                                    const member = server.members.find(m => m.user_id === userId)
                                     const displayName = member?.display_name || (userId === identity?.user_id ? identity?.display_name : `User ${userId.slice(0, 8)}`)
-                                    const level = getLevel(
-                                      house.signing_pubkey,
+                                    const level = getMemberLevel(
+                                      server.signing_pubkey,
                                       userId,
-                                      voicePresence.isUserInVoice(house.signing_pubkey, userId)
+                                      voicePresence.isUserInVoice(server.signing_pubkey, userId)
                                     )
                                     const isSpeaking = isUserSpeaking(userId)
 
@@ -603,27 +616,27 @@ function HouseViewPage() {
 
         {/* Main Content - Text Chat + Optional Voice */}
         <div className="flex-1 flex flex-col">
-          {!currentRoom ? (
+          {!currentChat ? (
             <div className="flex-1 flex items-center justify-center p-8">
               <div className="max-w-md w-full space-y-6 text-center">
                 <div className="w-12 h-px bg-foreground/20 mx-auto"></div>
-                <h2 className="text-xl font-light tracking-tight">Select a room</h2>
+                <h2 className="text-xl font-light tracking-tight">Select a chat</h2>
                 <p className="text-muted-foreground text-sm leading-relaxed font-light">
-                  Choose a room from the sidebar to start chatting with your roommates.
+                  Choose a chat from the sidebar to start chatting with your members.
                 </p>
               </div>
             </div>
           ) : (
             <>
-              {/* Room Header */}
+              {/* Chat Header */}
               <div className="border-b-2 border-border p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-2xl font-light">#</span>
                     <div className="space-y-1">
-                      <h2 className="text-lg font-light tracking-tight">{currentRoom.name}</h2>
-                      {currentRoom.description && (
-                        <p className="text-xs text-muted-foreground">{currentRoom.description}</p>
+                      <h2 className="text-lg font-light tracking-tight">{currentChat.name}</h2>
+                      {currentChat.description && (
+                        <p className="text-xs text-muted-foreground">{currentChat.description}</p>
                       )}
                     </div>
                   </div>
@@ -639,8 +652,8 @@ function HouseViewPage() {
                     {/* Welcome Message */}
                     <div className="p-4 border-2 border-border rounded-lg bg-card/50">
                       <p className="text-sm text-muted-foreground font-light">
-                        Welcome to <span className="text-foreground font-normal">#{currentRoom.name}</span>
-                        {currentRoom.description && ` — ${currentRoom.description}`}
+                        Welcome to <span className="text-foreground font-normal">#{currentChat.name}</span>
+                        {currentChat.description && ` — ${currentChat.description}`}
                       </p>
                     </div>
                     {/* TODO: Actual messages will go here */}
@@ -652,7 +665,7 @@ function HouseViewPage() {
                   <div className="max-w-4xl mx-auto">
                     <input
                       type="text"
-                      placeholder={`Message #${currentRoom.name}`}
+                      placeholder={`Message #${currentChat.name}`}
                       className="w-full px-4 py-3 bg-background border border-border rounded-lg text-sm font-light focus:outline-none focus:ring-2 focus:ring-primary"
                       disabled
                     />
@@ -670,10 +683,10 @@ function HouseViewPage() {
         <div className="w-64 border-l-2 border-border bg-card/50 flex flex-col">
           <div className="p-4 space-y-2 flex-1 overflow-y-auto">
             <h2 className="text-xs font-light tracking-wider uppercase text-muted-foreground px-2">
-              Members — {house.members.length}
+              Members — {server.members.length}
             </h2>
             <div className="space-y-1">
-              {house.members.map((member) => (
+              {server.members.map((member) => (
                 <div
                   key={member.user_id}
                   className="px-3 py-2 rounded-md hover:bg-accent/50 transition-colors"
@@ -689,10 +702,10 @@ function HouseViewPage() {
                       </div>
                       {/* Presence badge "attached" to the avatar */}
                       <div className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                        <PresenceSquare level={getLevel(
-                          house.signing_pubkey,
+                        <PresenceSquare level={getMemberLevel(
+                          server.signing_pubkey,
                           member.user_id,
-                          voicePresence.isUserInVoice(house.signing_pubkey, member.user_id)
+                          voicePresence.isUserInVoice(server.signing_pubkey, member.user_id)
                         )} />
                       </div>
                     </div>
@@ -751,19 +764,19 @@ function HouseViewPage() {
         </div>
       </div>
 
-      {/* Create Room Dialog */}
-      {showCreateRoomDialog && (
+      {/* Create Chat Dialog */}
+      {showCreateChatDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-card border-2 border-border rounded-lg p-6 max-w-md w-full mx-4">
-            <h2 className="text-lg font-light mb-4">Create New Room</h2>
+            <h2 className="text-lg font-light mb-4">Create New Chat</h2>
 
             <div className="space-y-4">
               <div>
-                <label className="text-sm font-light block mb-2">Room Name</label>
+                <label className="text-sm font-light block mb-2">Chat Name</label>
                 <input
                   type="text"
-                  value={roomName}
-                  onChange={(e) => setRoomName(e.target.value)}
+                  value={chatName}
+                  onChange={(e) => setChatName(e.target.value)}
                   maxLength={25}
                   className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm"
                   placeholder="general, voice-chat, etc."
@@ -775,10 +788,10 @@ function HouseViewPage() {
                 <label className="text-sm font-light block mb-2">Description (optional)</label>
                 <input
                   type="text"
-                  value={roomDescription}
-                  onChange={(e) => setRoomDescription(e.target.value)}
+                  value={chatDescription}
+                  onChange={(e) => setChatDescription(e.target.value)}
                   className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm"
-                  placeholder="What's this room for?"
+                  placeholder="What's this chat for?"
                 />
               </div>
             </div>
@@ -786,9 +799,9 @@ function HouseViewPage() {
             <div className="flex gap-2 mt-6">
               <Button
                 onClick={() => {
-                  setShowCreateRoomDialog(false)
-                  setRoomName('')
-                  setRoomDescription('')
+                  setShowCreateChatDialog(false)
+                  setChatName('')
+                  setChatDescription('')
                 }}
                 variant="outline"
                 className="flex-1"
@@ -796,45 +809,45 @@ function HouseViewPage() {
                 Cancel
               </Button>
               <Button
-                onClick={handleCreateRoom}
-                disabled={!roomName.trim() || isCreatingRoom}
+                onClick={handleCreateChat}
+                disabled={!chatName.trim() || isCreatingChat}
                 className="flex-1"
               >
-                {isCreatingRoom ? 'Creating...' : 'Create Room'}
+                {isCreatingChat ? 'Creating...' : 'Create Chat'}
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Delete Room Modal */}
-      {deleteRoomTarget && (
+      {/* Delete Chat Modal */}
+      {deleteChatTarget && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="w-full max-w-md border-2 border-border bg-background rounded-lg p-6 space-y-4">
             <div className="space-y-2">
-              <h2 className="text-lg font-light tracking-tight">Delete room?</h2>
+              <h2 className="text-lg font-light tracking-tight">Delete chat?</h2>
               <p className="text-sm text-muted-foreground font-light leading-relaxed">
-                This will remove <span className="text-foreground font-normal">#{deleteRoomTarget.name}</span> for everyone in this house.
+                This will remove <span className="text-foreground font-normal">#{deleteChatTarget.name}</span> for everyone in this server.
               </p>
-              {deleteRoomError && (
-                <p className="text-sm text-red-500 font-light">{deleteRoomError}</p>
+              {deleteChatError && (
+                <p className="text-sm text-red-500 font-light">{deleteChatError}</p>
               )}
             </div>
             <div className="flex gap-3 pt-2">
               <Button
                 variant="outline"
                 className="flex-1 h-10 font-light"
-                onClick={() => setDeleteRoomTarget(null)}
-                disabled={isDeletingRoom}
+                onClick={() => setDeleteChatTarget(null)}
+                disabled={isDeletingChat}
               >
                 Cancel
               </Button>
               <Button
                 className="flex-1 h-10 font-light bg-red-600 hover:bg-red-700 text-white"
-                onClick={confirmDeleteRoom}
-                disabled={isDeletingRoom}
+                onClick={confirmDeleteChat}
+                disabled={isDeletingChat}
               >
-                {isDeletingRoom ? 'Deleting…' : 'Delete'}
+                {isDeletingChat ? 'Deleting…' : 'Delete'}
               </Button>
             </div>
           </div>
@@ -844,4 +857,4 @@ function HouseViewPage() {
   )
 }
 
-export default HouseViewPage
+export default ServerViewPage

@@ -50,13 +50,13 @@ export async function saveAudioSettings(settings: AudioSettings): Promise<void> 
   return await invoke('save_audio_settings', { settings })
 }
 
-export interface Room {
+export interface Chat {
   id: string
   name: string
   description: string | null
 }
 
-export interface HouseMember {
+export interface ServerMember {
   user_id: string
   display_name: string
   joined_at: string
@@ -65,12 +65,12 @@ export interface HouseMember {
 
 export type ConnectionMode = 'Signaling' | 'DHT' | 'Manual'
 
-export interface House {
+export interface Server {
   id: string
   name: string
   created_at: string
-  rooms: Room[]
-  members: HouseMember[]
+  rooms: Chat[]
+  members: ServerMember[]
 
   // Cryptographic fields (Ed25519 signing)
   signing_pubkey: string
@@ -89,76 +89,76 @@ export interface House {
   has_signing_key: boolean
 }
 
-export interface EncryptedHouseHint {
+export interface EncryptedServerHint {
   signing_pubkey: string
   encrypted_state: string
   signature: string
   last_updated: string
 }
 
-export async function createHouse(name: string, userId: string, displayName: string): Promise<House> {
-  return await invoke('create_house', { name, userId, displayName })
+export async function createServer(name: string, userId: string, displayName: string): Promise<Server> {
+  return await invoke('create_server', { name, userId, displayName })
 }
 
-export async function listHouses(): Promise<House[]> {
-  return await invoke('list_houses')
+export async function listServers(): Promise<Server[]> {
+  return await invoke('list_servers')
 }
 
-export async function loadHouse(houseId: string): Promise<House> {
-  return await invoke('load_house', { houseId })
+export async function loadServer(serverId: string): Promise<Server> {
+  return await invoke('load_server', { serverId })
 }
 
-export async function deleteHouse(houseId: string): Promise<void> {
-  return await invoke('delete_house', { houseId })
+export async function deleteServer(serverId: string): Promise<void> {
+  return await invoke('delete_server', { serverId })
 }
 
-export async function findHouseByInvite(inviteCode: string): Promise<House | null> {
-  return await invoke('find_house_by_invite', { inviteCode })
+export async function findServerByInvite(inviteCode: string): Promise<Server | null> {
+  return await invoke('find_server_by_invite', { inviteCode })
 }
 
-export async function joinHouse(houseId: string, userId: string, displayName: string): Promise<House> {
-  return await invoke('join_house', { houseId, userId, displayName })
+export async function joinServer(serverId: string, userId: string, displayName: string): Promise<Server> {
+  return await invoke('join_server', { serverId, userId, displayName })
 }
 
-export async function addRoom(houseId: string, name: string, description: string | null): Promise<House> {
-  return await invoke('add_room', { houseId, name, description })
+export async function addRoom(serverId: string, name: string, description: string | null): Promise<Server> {
+  return await invoke('add_room', { serverId, name, description })
 }
 
-export async function removeRoom(houseId: string, roomId: string): Promise<House> {
-  return await invoke('remove_room', { houseId, roomId })
+export async function removeChat(serverId: string, roomId: string): Promise<Server> {
+  return await invoke('remove_chat', { serverId, roomId })
 }
 
 
-export async function importHouseHint(house: House): Promise<void> {
-  return await invoke('import_house_hint', { house })
+export async function importServerHint(server: Server): Promise<void> {
+  return await invoke('import_server_hint', { server })
 }
 
-export async function registerHouseHint(signalingServer: string, hint: EncryptedHouseHint): Promise<void> {
-  return await invoke('register_house_hint', { signalingServer, hint })
+export async function registerServerHint(signalingServer: string, hint: EncryptedServerHint): Promise<void> {
+  return await invoke('register_server_hint', { signalingServer, hint })
 }
 
-export async function getHouseHint(signalingServer: string, signingPubkey: string): Promise<EncryptedHouseHint | null> {
-  return await invoke('get_house_hint', { signalingServer, signingPubkey })
+export async function getServerHint(signalingServer: string, signingPubkey: string): Promise<EncryptedServerHint | null> {
+  return await invoke('get_server_hint', { signalingServer, signingPubkey })
 }
 
-export async function publishHouseHintOpaque(signalingServer: string, houseId: string): Promise<void> {
-  return await invoke('publish_house_hint_opaque', { signalingServer, houseId })
+export async function publishServerHintOpaque(signalingServer: string, serverId: string): Promise<void> {
+  return await invoke('publish_server_hint_opaque', { signalingServer, serverId })
 }
 
-export async function publishHouseHintMemberLeft(signalingServer: string, houseId: string, userId: string): Promise<void> {
-  return await invoke('publish_house_hint_member_left', { signalingServer, houseId, userId })
+export async function publishServerHintMemberLeft(signalingServer: string, serverId: string, userId: string): Promise<void> {
+  return await invoke('publish_server_hint_member_left', { signalingServer, serverId, userId })
 }
 
-export async function fetchAndImportHouseHintOpaque(signalingServer: string, signingPubkey: string): Promise<boolean> {
-  return await invoke('fetch_and_import_house_hint_opaque', { signalingServer, signingPubkey })
+export async function fetchAndImportServerHintOpaque(signalingServer: string, signingPubkey: string): Promise<boolean> {
+  return await invoke('fetch_and_import_server_hint_opaque', { signalingServer, signingPubkey })
 }
 
 export async function resolveInviteCode(signalingServer: string, inviteCode: string): Promise<string | null> {
   return await invoke('resolve_invite_code', { signalingServer, inviteCode })
 }
 
-export async function createTemporaryInvite(signalingServer: string, houseId: string, maxUses: number): Promise<string> {
-  return await invoke('create_temporary_invite', { signalingServer, houseId, maxUses })
+export async function createTemporaryInvite(signalingServer: string, serverId: string, maxUses: number): Promise<string> {
+  return await invoke('create_temporary_invite', { signalingServer, serverId, maxUses })
 }
 
 export async function redeemTemporaryInvite(
@@ -166,12 +166,12 @@ export async function redeemTemporaryInvite(
   code: string,
   userId: string,
   displayName: string
-): Promise<House> {
+): Promise<Server> {
   return await invoke('redeem_temporary_invite', { signalingServer, code, userId, displayName })
 }
 
-export async function revokeActiveInvite(signalingServer: string, houseId: string): Promise<void> {
-  return await invoke('revoke_active_invite', { signalingServer, houseId })
+export async function revokeActiveInvite(signalingServer: string, serverId: string): Promise<void> {
+  return await invoke('revoke_active_invite', { signalingServer, serverId })
 }
 
 export async function checkSignalingServer(url?: string): Promise<boolean> {
@@ -284,5 +284,3 @@ export function getHttpUrl(signalingServer: string): string {
   }
   return url.replace(/\/$/, '')
 }
-
-

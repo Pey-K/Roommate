@@ -4,7 +4,7 @@ import { useIdentity } from '../contexts/IdentityContext'
 import { useProfile } from '../contexts/ProfileContext'
 import { useWebRTC } from '../contexts/WebRTCContext'
 import { useSignaling } from '../contexts/SignalingContext'
-import { useActiveHouse } from '../contexts/ActiveHouseContext'
+import { useActiveServer } from '../contexts/ActiveServerContext'
 import { useSidebarWidth } from '../contexts/SidebarWidthContext'
 import { useMemo, useRef, useState, useEffect, type CSSProperties } from 'react'
 import { Button } from './ui/button'
@@ -23,8 +23,8 @@ function initials(name: string) {
   return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
-/** Self presence: gray = offline, orange = neighborhood, green = in house, blue = in call */
-type SelfPresence = 'offline' | 'neighborhood' | 'in_house' | 'in_call'
+/** Self presence: gray = offline, orange = home, green = in server, blue = in call */
+type SelfPresence = 'offline' | 'home' | 'in_server' | 'in_call'
 
 function getSelfPresence(
   signalingConnected: boolean,
@@ -33,8 +33,8 @@ function getSelfPresence(
 ): SelfPresence {
   if (!signalingConnected) return 'offline'
   if (isInVoice) return 'in_call'
-  if (activeSigningPubkey != null) return 'in_house'
-  return 'neighborhood'
+  if (activeSigningPubkey != null) return 'in_server'
+  return 'home'
 }
 
 export function UserCard() {
@@ -42,7 +42,7 @@ export function UserCard() {
   const { profile } = useProfile()
   const { isInVoice, leaveVoice } = useWebRTC()
   const { status: signalingStatus } = useSignaling()
-  const { activeSigningPubkey } = useActiveHouse()
+  const { activeSigningPubkey } = useActiveServer()
   const { width, setWidth, resetWidth } = useSidebarWidth()
   const resizeHandleRef = useRef<HTMLDivElement>(null)
   const [isResizing, setIsResizing] = useState(false)
@@ -65,10 +65,10 @@ export function UserCard() {
     switch (selfPresence) {
       case 'offline':
         return 'Offline'
-      case 'neighborhood':
-        return 'Neighborhood'
-      case 'in_house':
-        return 'In house'
+      case 'home':
+        return 'Home'
+      case 'in_server':
+        return 'In server'
       case 'in_call':
         return 'In voice'
       default:
@@ -80,9 +80,9 @@ export function UserCard() {
     switch (selfPresence) {
       case 'offline':
         return 'text-muted-foreground'
-      case 'neighborhood':
+      case 'home':
         return 'text-orange-500'
-      case 'in_house':
+      case 'in_server':
         return 'text-green-500'
       case 'in_call':
         return 'text-blue-500'
@@ -148,15 +148,15 @@ export function UserCard() {
               {initials(displayName)}
             </div>
           )}
-          {/* Presence dot: gray = offline, orange = neighborhood, green = in house, blue = in call */}
+          {/* Presence dot: gray = offline, orange = home, green = in server, blue = in call */}
           <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 border-background rounded-none bg-background">
             <div
               className={`w-full h-full rounded-none ${
                 selfPresence === 'offline'
                   ? 'bg-gray-500'
-                  : selfPresence === 'neighborhood'
+                  : selfPresence === 'home'
                     ? 'bg-orange-500'
-                    : selfPresence === 'in_house'
+                    : selfPresence === 'in_server'
                       ? 'bg-green-500'
                       : 'bg-blue-500'
               }`}

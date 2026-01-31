@@ -1,8 +1,8 @@
 [package]
-name = "signaling-server"
+name = "cordia-beacon"
 version = "0.1.0"
 edition = "2021"
-description = "WebSocket signaling server for Roommate P2P voice chat"
+description = "Beacon server for Cordia P2P voice chat"
 authors = ["Pey-K"]
 
 [dependencies]
